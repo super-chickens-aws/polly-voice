@@ -35,30 +35,34 @@ Xây dựng một website cho phép người dùng chuyển đổi **Text-to-Spe
 
 #### Voice Settings
 
-| Setting            | Description                            |
-| ------------------ | -------------------------------------- |
-| Language           | Ngôn ngữ (Hiện tại chỉ triển khai tiếng anh)                                |
-| Voice              | Giọng đọc                              |
-| Preset             | Cấu hình giọng đọc có sẵn              |
-| Speed              | Điều chỉnh tốc độ đọc                  |
-| Pitch              | Điều chỉnh cao độ                      |
-| Volume             | Điều chỉnh âm lượng                    |
-| Emotion            | Điều chỉnh cảm xúc *(nếu được hỗ trợ)* |
-| Stability          | Độ ổn định *(nếu được hỗ trợ)*         |
-| Similarity         | Độ tương đồng *(nếu được hỗ trợ)*      |
-| Style Exaggeration | Mức độ biểu cảm *(nếu được hỗ trợ)*    |
+> **Engine mặc định:** **Neural** — cung cấp giọng đọc tự nhiên nhất. Một số thông số chỉ khả dụng với Standard engine và sẽ được ghi chú rõ.
+
+| Setting      | SSML Tag                   | Giá trị hợp lệ                                                     | Engine hỗ trợ        | Description                          |
+| ------------ | -------------------------- | ------------------------------------------------------------------ | -------------------- | ------------------------------------ |
+| Language     | *(API parameter)*          | `en-US`, `en-GB`, `en-AU`, ...                                     | All                  | Ngôn ngữ (hiện tại chỉ tiếng Anh)   |
+| Voice        | *(API parameter)*          | Danh sách giọng Polly (vd: `Joanna`, `Matthew`, `Amy`, ...)        | All                  | Giọng đọc                            |
+| Engine       | *(API parameter)*          | `neural` *(mặc định)*, `standard`, `long-form`                     | —                    | Bộ máy tổng hợp giọng nói            |
+| Preset       | *(combination)*            | Deep Male, Young Male, Soft Female, Expressive Female, MC, Podcast, Audiobook | All     | Cấu hình giọng đọc có sẵn           |
+| Speed        | `<prosody rate="...">`     | `x-slow`, `slow`, `medium`, `fast`, `x-fast` hoặc `20%`–`200%`    | All                  | Điều chỉnh tốc độ đọc               |
+| Volume       | `<prosody volume="...">`   | `x-soft`, `soft`, `medium`, `loud`, `x-loud` hoặc `+ndB` / `-ndB` | All                  | Điều chỉnh âm lượng                 |
+| Pitch        | `<prosody pitch="...">`    | `x-low`, `low`, `medium`, `high`, `x-high` hoặc `+n%` / `-n%`     | **Standard only**    | Điều chỉnh cao độ giọng              |
+| Break        | `<break time="...">`       | `0ms` – `10000ms` (vd: `500ms`, `2s`)                              | All                  | Tạm dừng giữa các câu               |
+| Emphasis     | `<emphasis level="...">`   | `strong`, `moderate`, `reduced`                                    | **Standard only**    | Nhấn mạnh từ hoặc cụm từ            |
+| Domain Style | `<amazon:domain name="...">` | `news`, `conversational`                                         | **Neural only**      | Phong cách đọc (tin tức / hội thoại) |
+
+> **Lưu ý:** Với engine **Neural** (mặc định), `Pitch` và `Emphasis` **không được hỗ trợ** — UI cần ẩn hoặc vô hiệu hóa các thông số này khi chọn Neural engine.
 
 #### Available Presets
 
-| Preset            |
-| ----------------- |
-| Deep Male         |
-| Young Male        |
-| Soft Female       |
-| Expressive Female |
-| MC                |
-| Podcast           |
-| Audiobook         |
+| Preset            | Voice mặc định | Engine    | Mô tả                                        |
+| ----------------- | -------------- | --------- | -------------------------------------------- |
+| Deep Male         | Matthew        | Neural    | Giọng nam trầm, uy quyền                     |
+| Young Male        | Kevin          | Neural    | Giọng nam trẻ, năng động                     |
+| Soft Female       | Joanna         | Neural    | Giọng nữ nhẹ nhàng, chậm rãi                 |
+| Expressive Female | Danielle       | Long-form | Giọng nữ biểu cảm, phù hợp đọc truyện       |
+| MC                | Stephen        | Neural    | Giọng MC rõ ràng, tốc độ vừa phải            |
+| Podcast           | Matthew        | Neural    | Giọng podcast tự nhiên, Domain conversational |
+| Audiobook         | Joanna         | Long-form | Giọng đọc sách, nhịp chậm, rõ ràng           |
 
 ---
 
@@ -160,12 +164,12 @@ Xây dựng một website cho phép người dùng chuyển đổi **Text-to-Spe
 
 **Description:** Giao diện chuyển đổi văn bản thành giọng nói.
 
-| Section      | Features                                                                                                 |
-| ------------ | -------------------------------------------------------------------------------------------------------- |
-| **Input**    | Nhập văn bản hoặc tải lên file (`.txt`)                                                                  |
-| **Settings** | Chọn **Language**, **Voice**, **Preset**, điều chỉnh **Speed**, **Pitch**, **Volume** và các thông số AI |
-| **Preview**  | Nút **Generate**, **Play Preview** và trình phát âm thanh                                                |
-| **Export**   | Chọn định dạng đầu ra (MP3, WAV,...) và tải xuống                                                        |
+| Section      | Features                                                                                                                           |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
+| **Input**    | Nhập văn bản trực tiếp hoặc tải lên file (`.txt`)                                                                                  |
+| **Settings** | Chọn **Language**, **Voice**, **Engine**, **Preset**, điều chỉnh **Speed**, **Volume**, **Break**; **Pitch** (Standard only), **Emphasis** (Standard only), **Domain Style** (Neural only) |
+| **Preview**  | Nút **Generate**, **Play Preview** và trình phát âm thanh                                                                          |
+| **Export**   | Chọn định dạng đầu ra (`.mp3`) và tải xuống                                                                                        |
 
 ---
 
@@ -240,26 +244,53 @@ CREATE TABLE users (
 
 ### Text History
 
-**Description:** Lưu lịch sử chuyển đổi từ văn bản sang giọng nói (Text-to-Speech).
+**Description:** Lưu lịch sử chuyển đổi từ văn bản sang giọng nói (Text-to-Speech). Áp dụng **Hybrid Approach**: các thông số quan trọng lưu thành cột riêng để dễ query, các thông số SSML nâng cao lưu trong `ssml_params` dạng JSON.
 
-| Field            | Data Type    | Constraints                      | Description                                             |
-| ---------------- | ------------ | -------------------------------- | ------------------------------------------------------- |
-| `id`             | BIGINT       | **PK**, AUTO_INCREMENT, NOT NULL | Mã lịch sử                                              |
-| `user_id`        | BIGINT       | **FK → User(id)**, NOT NULL      | Người thực hiện                                         |
-| `text_content`   | TEXT         | NULL                             | Nội dung văn bản (nếu nhập trực tiếp)                   |
-| `text_file_url`  | VARCHAR(512) | NULL                             | Đường dẫn file văn bản trên Amazon S3 (nếu upload file) |
-| `voice`          | VARCHAR(100) | NOT NULL                         | Giọng đọc                                               |
-| `language`       | VARCHAR(50)  | NOT NULL                         | Ngôn ngữ                                                |
-| `speed`          | FLOAT        | DEFAULT 1.0                      | Tốc độ đọc                                              |
-| `pitch`          | FLOAT        | DEFAULT 1.0                      | Cao độ                                                  |
-| `volume`         | FLOAT        | DEFAULT 1.0                      | Âm lượng                                                |
-| `audio_file_url` | VARCHAR(512) | NULL                             | Đường dẫn file âm thanh trên Amazon S3                  |
-| `created_at`     | TIMESTAMP    | DEFAULT CURRENT_TIMESTAMP        | Thời điểm tạo                                           |
+#### Cột cố định (Indexed columns)
+
+| Field             | Data Type     | Constraints                           | Description                                              |
+| ----------------- | ------------- | ------------------------------------- | -------------------------------------------------------- |
+| `id`              | BIGINT        | **PK**, AUTO_INCREMENT, NOT NULL      | Mã lịch sử                                               |
+| `user_id`         | BIGINT        | **FK → User(id)**, NOT NULL           | Người thực hiện                                          |
+| `text_content`    | TEXT          | NULL                                  | Nội dung văn bản (nếu nhập trực tiếp)                    |
+| `text_file_url`   | VARCHAR(512)  | NULL                                  | Đường dẫn file văn bản trên Amazon S3 (nếu upload file)  |
+| `voice`           | VARCHAR(100)  | NOT NULL                              | Giọng đọc (vd: `Joanna`, `Matthew`)                      |
+| `language`        | VARCHAR(50)   | NOT NULL                              | Ngôn ngữ (vd: `en-US`)                                   |
+| `engine`          | VARCHAR(20)   | NOT NULL, DEFAULT `'neural'`          | Bộ máy tổng hợp: `neural`, `standard`, `long-form`       |
+| `preset`          | VARCHAR(100)  | NULL                                  | Preset đã chọn (vd: `Podcast`, `Audiobook`)               |
+| `speed`           | VARCHAR(20)   | DEFAULT `'medium'`                    | Tốc độ đọc (SSML rate: `x-slow`→`x-fast` hoặc `100%`)   |
+| `volume`          | VARCHAR(20)   | DEFAULT `'medium'`                    | Âm lượng (SSML volume: `x-soft`→`x-loud` hoặc `+0dB`)   |
+| `output_format`   | VARCHAR(10)   | NOT NULL, DEFAULT `'mp3'`             | Định dạng file xuất: `mp3`, `ogg_vorbis`, `pcm`          |
+| `character_count` | INT           | NOT NULL, DEFAULT 0                   | Số ký tự đã xử lý (dùng để kiểm soát giới hạn & chi phí) |
+| `ssml_enabled`    | TINYINT(1)    | NOT NULL, DEFAULT 0                   | `1` = request dùng SSML, `0` = plain text                |
+| `audio_file_url`  | VARCHAR(512)  | NULL                                  | Đường dẫn file âm thanh trên Amazon S3                   |
+| `created_at`      | TIMESTAMP     | DEFAULT CURRENT_TIMESTAMP             | Thời điểm tạo                                            |
+
+#### Cột JSON (Thông số SSML nâng cao)
+
+| Field         | Data Type | Constraints | Description                                                                     |
+| ------------- | --------- | ----------- | ------------------------------------------------------------------------------- |
+| `ssml_params` | JSON      | NULL        | Thông số SSML nâng cao, chỉ lưu khi `ssml_enabled = 1`. Xem cấu trúc bên dưới. |
+
+**Cấu trúc `ssml_params` (ví dụ):**
+
+```json
+{
+  "pitch": "+5%",
+  "break_time": "500ms",
+  "emphasis": "moderate",
+  "domain_style": "conversational"
+}
+```
+
+> **Lưu ý:** `pitch` và `emphasis` chỉ có giá trị khi `engine = 'standard'`. `domain_style` chỉ có giá trị khi `engine = 'neural'`. Backend cần validate trước khi lưu.
 
 #### Constraints
 
 * **Primary Key:** `id`
 * **Foreign Key:** `user_id` → `users(id)`
+* **Engine:** Mặc định `neural`; nếu `engine = 'neural'` thì `pitch` và `emphasis` trong `ssml_params` sẽ bị bỏ qua.
+* **Character Count:** Tự động tính từ `text_content` hoặc nội dung file, dùng để kiểm soát giới hạn (Guest vs User) và ước tính chi phí AWS Polly.
 * **Storage:** Chỉ lưu URL hoặc S3 Key của các file, dữ liệu thực được lưu trên Amazon S3.
 * **Timestamp:** `created_at` được tự động gán thời gian khi tạo lịch sử.
 
@@ -267,20 +298,31 @@ CREATE TABLE users (
 
 ```sql
 CREATE TABLE text_history (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    user_id BIGINT NOT NULL,
-    text_content TEXT,
-    text_file_url VARCHAR(512),
-    voice VARCHAR(100) NOT NULL,
-    language VARCHAR(50) NOT NULL,
-    speed FLOAT DEFAULT 1.0,
-    pitch FLOAT DEFAULT 1.0,
-    volume FLOAT DEFAULT 1.0,
-    audio_file_url VARCHAR(512),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    id              BIGINT        AUTO_INCREMENT PRIMARY KEY,
+    user_id         BIGINT        NOT NULL,
+    text_content    TEXT,
+    text_file_url   VARCHAR(512),
+    voice           VARCHAR(100)  NOT NULL,
+    language        VARCHAR(50)   NOT NULL,
+    engine          VARCHAR(20)   NOT NULL DEFAULT 'neural',
+    preset          VARCHAR(100),
+    speed           VARCHAR(20)   DEFAULT 'medium',
+    volume          VARCHAR(20)   DEFAULT 'medium',
+    output_format   VARCHAR(10)   NOT NULL DEFAULT 'mp3',
+    character_count INT           NOT NULL DEFAULT 0,
+    ssml_enabled    TINYINT(1)    NOT NULL DEFAULT 0,
+    ssml_params     JSON,
+    audio_file_url  VARCHAR(512),
+    created_at      TIMESTAMP     DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT fk_text_history_user
-        FOREIGN KEY (user_id) REFERENCES users(id)
+        FOREIGN KEY (user_id) REFERENCES users(id),
+
+    CONSTRAINT chk_engine
+        CHECK (engine IN ('neural', 'standard', 'long-form')),
+
+    CONSTRAINT chk_output_format
+        CHECK (output_format IN ('mp3', 'ogg_vorbis', 'pcm'))
 );
 ```
 
