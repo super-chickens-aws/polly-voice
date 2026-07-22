@@ -437,8 +437,9 @@ graph TB
 | :----: | -------- | :--: | :--------: | ----------- |
 | `POST` | `/tts` | Guest / User | — | Chuyển văn bản thành giọng nói |
 | `POST` | `/tts/preview` | Guest / User | — | Nghe thử (không lưu lịch sử, giới hạn 500 ký tự) |
-| `GET` | `/tts/history` | User | `?page=1&limit=20` | Lấy danh sách lịch sử (có pagination) |
+| `GET` | `/tts/history` | User | `?limit=20&cursor=<Base64>` | Lấy danh sách lịch sử (Cursor-based pagination) |
 | `GET` | `/tts/{id}` | User | — | Lấy chi tiết một lần chuyển đổi |
+| `GET` | `/tts/{id}/download` | User | — | Tạo Pre-Signed GET URL (15 phút) từ `audio_s3_key` |
 | `DELETE` | `/tts/{id}` | User | — | Soft delete một lịch sử |
 
 #### POST /tts — Request Validation
@@ -460,36 +461,23 @@ graph TB
 
 | Method | Endpoint | Auth | Pagination | Description |
 | :----: | -------- | :--: | :--------: | ----------- |
+| `POST` | `/stt/presign-upload` | User | — | Tạo Pre-Signed POST URL để client upload trực tiếp file audio lên S3 |
 | `POST` | `/stt` | Guest / User | — | Chuyển file âm thanh thành văn bản |
-| `GET` | `/stt/history` | User | `?page=1&limit=20` | Lấy danh sách lịch sử (có pagination) |
+| `GET` | `/stt/history` | User | `?limit=20&cursor=<Base64>` | Lấy danh sách lịch sử (Cursor-based pagination) |
 | `GET` | `/stt/{id}` | User | — | Lấy chi tiết một lần chuyển đổi |
+| `GET` | `/stt/{id}/download` | User | — | Tạo Pre-Signed GET URL (15 phút) cho file văn bản kết quả (`text_s3_key`) |
 | `DELETE` | `/stt/{id}` | User | — | Soft delete một lịch sử |
 
 ---
 
-### File
-
-**Description:** Quản lý các tệp trên Amazon S3. Upload dùng **Pre-Signed POST** (client upload trực tiếp lên S3). Download trả về **Pre-Signed URL** (15 phút TTL).
-
-| Method | Endpoint | Auth | Description |
-| :----: | -------- | :--: | ----------- |
-| `POST` | `/files/presign-upload` | User | Tạo Pre-Signed POST URL để client upload trực tiếp lên S3 |
-| `GET` | `/files/{id}` | User | Lấy thông tin file metadata |
-| `GET` | `/files/{id}/download` | User | Tạo Pre-Signed GET URL (15 phút) để tải file |
-| `DELETE` | `/files/{id}` | User | Soft delete file metadata + xóa file trên S3 |
-
----
-
-### Pagination Response Format
+### Pagination Response Format (DynamoDB Cursor-Based)
 
 ```json
 {
   "data": [],
   "pagination": {
-    "page": 1,
     "limit": 20,
-    "total": 542,
-    "total_pages": 28
+    "next_cursor": "eyJ1c2VyX2lkIjoiMTIzIiwiY3JlYXRlZF9hdCI6MTY5ODc2NTQzMn0="
   }
 }
 ```
@@ -501,10 +489,9 @@ graph TB
 | Module         | Number of APIs |
 | -------------- | :------------: |
 | Authentication |        5       |
-| Text-to-Speech |        5       |
-| Speech-to-Text |        4       |
-| File           |        4       |
-| **Total**      |   **18 APIs**  |
+| Text-to-Speech |        6       |
+| Speech-to-Text |        6       |
+| **Total**      |   **17 APIs**  |
 
 ## 10. References
 
