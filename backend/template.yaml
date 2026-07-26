@@ -1,0 +1,103 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Polly Voice Node.js API
+
+Parameters:
+  MongoDbUri:
+    Type: String
+    NoEcho: true
+  MediaBucketName:
+    Type: String
+  CognitoUserPoolId:
+    Type: String
+  CognitoClientId:
+    Type: String
+  AllowedOrigins:
+    Type: String
+    Default: http://localhost:5173
+
+Globals:
+  Function:
+    Runtime: nodejs20.x
+    Architectures: [arm64]
+    Timeout: 60
+    MemorySize: 1024
+    Tracing: Active
+
+Resources:
+  PollyVoiceApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowOrigins:
+          - !Ref AllowedOrigins
+        AllowHeaders:
+          - Authorization
+          - Content-Type
+          - X-User-Id
+        AllowMethods:
+          - GET
+          - POST
+          - DELETE
+          - OPTIONS
+
+  PollyVoiceFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        EntryPoints: [src/lambda.ts]
+        Minify: true
+        Sourcemap: true
+        Target: es2022
+        Format: esm
+        OutExtension:
+          - .js=.mjs
+    Properties:
+      Handler: src/lambda.handler
+      Events:
+        Root:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref PollyVoiceApi
+            Path: /
+            Method: ANY
+            PayloadFormatVersion: "2.0"
+        Proxy:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref PollyVoiceApi
+            Path: /{proxy+}
+            Method: ANY
+            PayloadFormatVersion: "2.0"
+      Environment:
+        Variables:
+          NODE_ENV: production
+          MONGODB_URI: !Ref MongoDbUri
+          AWS_ENABLED: "true"
+          AWS_REGION: !Ref AWS::Region
+          AWS_S3_MEDIA_BUCKET: !Ref MediaBucketName
+          AWS_COGNITO_USER_POOL_ID: !Ref CognitoUserPoolId
+          AWS_COGNITO_CLIENT_ID: !Ref CognitoClientId
+          AWS_COGNITO_ISSUER_URI: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${CognitoUserPoolId}
+          ALLOWED_ORIGINS: !Ref AllowedOrigins
+          PUBLIC_BASE_URL: https://placeholder.invalid
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref MediaBucketName
+        - Statement:
+            - Effect: Allow
+              Action:
+                - polly:SynthesizeSpeech
+                - polly:DescribeVoices
+                - transcribe:StartTranscriptionJob
+                - transcribe:GetTranscriptionJob
+                - transcribe:DeleteTranscriptionJob
+              Resource: "*"
+
+Outputs:
+  ApiUrl:
+    Description: HTTP API URL
+    Value: !Sub https://${PollyVoiceApi}.execute-api.${AWS::Region}.amazonaws.com
+  FunctionName:
+    Value: !Ref PollyVoiceFunction

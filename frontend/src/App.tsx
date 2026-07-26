@@ -1,5 +1,16 @@
 import React, { useState, useEffect, useRef } from 'react';
 import './index.css';
+import {
+  createStt,
+  createTts,
+  deleteSttHistory,
+  deleteTtsHistory,
+  fetchSttHistory,
+  fetchTtsHistory,
+  type SttResult,
+  type TtsResult
+} from './api';
+import { currentUser, signIn, signOut, signUp } from './auth';
 
 // Types
 type EngineType = 'neural' | 'standard' | 'long-form';
@@ -136,8 +147,48 @@ function App() {
     };
   }, [currentAudioUrl]);
 
-  // Handle Login / Register Simulation (Cognito integration point)
-  const handleAuthSubmit = (e: React.FormEvent) => {
+  const mapTtsHistory = (item: TtsResult): TTSHistoryItem => ({
+    id: item.id,
+    text_content: item.text,
+    voice: item.voice,
+    engine: item.engine,
+    audio_s3_key: item.id,
+    audio_url: item.media.downloadUrl,
+    audio_file_size: item.media.fileSize,
+    created_at: new Date(item.createdAt).getTime()
+  });
+
+  const mapSttHistory = (item: SttResult): STTHistoryItem => ({
+    id: item.id,
+    file_name: item.fileName,
+    audio_s3_key: item.id,
+    audio_file_size: item.audioFileSize,
+    result_text: item.resultText,
+    created_at: new Date(item.createdAt).getTime()
+  });
+
+  const loadHistory = async () => {
+    try {
+      const [ttsItems, sttItems] = await Promise.all([fetchTtsHistory(), fetchSttHistory()]);
+      setTtsHistory(ttsItems.map(mapTtsHistory));
+      setSttHistory(sttItems.map(mapSttHistory));
+    } catch (error) {
+      console.error('Không thể tải lịch sử', error);
+    }
+  };
+
+  useEffect(() => {
+    const session = currentUser();
+    if (session) {
+      setUserRole('user');
+      setUserEmail(session.email);
+      setCognitoSub(session.id);
+      void loadHistory();
+    }
+  }, []);
+
+  // Handle Login / Register with Cognito (or local mode)
+  const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!authEmailInput || !authPasswordInput) {
       setAuthError('Vui lòng nhập đầy đủ Email và Mật khẩu');
@@ -148,32 +199,24 @@ function App() {
       return;
     }
 
-    // Simulate Cognito JWT Authentication
-    const mockSub = 'us-east-1:' + Math.random().toString(36).substring(2, 11);
-    setUserRole('user');
-    setUserEmail(authEmailInput);
-    setCognitoSub(mockSub);
-    setShowAuthModal(false);
-    setAuthError('');
-
-    // Pre-populate sample history for user
-    if (ttsHistory.length === 0) {
-      setTtsHistory([
-        {
-          id: 'tts-101',
-          text_content: 'Welcome to Polly Voice! This is an example generated audio history item.',
-          voice: 'Joanna',
-          engine: 'neural',
-          audio_s3_key: 'tts/user-001/audio-101.mp3',
-          audio_url: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3',
-          audio_file_size: 245000,
-          created_at: Date.now() - 3600000
-        }
-      ]);
+    try {
+      if (authMode === 'register') {
+        await signUp(authNameInput, authEmailInput, authPasswordInput);
+      }
+      const session = await signIn(authEmailInput, authPasswordInput);
+      setUserRole('user');
+      setUserEmail(session.email);
+      setCognitoSub(session.id);
+      setShowAuthModal(false);
+      setAuthError('');
+      await loadHistory();
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : 'Không thể đăng nhập.');
     }
   };
 
   const handleLogout = () => {
+    signOut();
     setUserRole('guest');
     setUserEmail('');
     setCognitoSub('');
@@ -198,7 +241,7 @@ function App() {
   };
 
   // Generate TTS
-  const handleGenerateTTS = (isPreview: boolean = false) => {
+  const handleGenerateTTS = async (isPreview: boolean = false) => {
     if (!text.trim()) {
       alert('Vui lòng nhập văn bản cần chuyển đổi!');
       return;
@@ -211,28 +254,25 @@ function App() {
     setIsGenerating(true);
     setIsPlaying(false);
 
-    // Simulate Polly API Call & Presigned S3 audio URL return
-    setTimeout(() => {
-      // Demo audio stream
-      const mockAudio = 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3';
-      setCurrentAudioUrl(mockAudio);
+    try {
+      const result = await createTts({
+        text,
+        language,
+        voice,
+        engine,
+        outputFormat: 'mp3',
+        preset,
+        settings: { speed, volume, breakTimeMs: breakTime, pitch, emphasis, domainStyle }
+      }, isPreview);
+      setCurrentAudioUrl(result.media.downloadUrl);
       setIsGenerating(false);
-
-      // If registered User and not preview mode, save to history
       if (userRole === 'user' && !isPreview) {
-        const newHistoryItem: TTSHistoryItem = {
-          id: 'tts-' + Date.now(),
-          text_content: text,
-          voice: voice,
-          engine: engine,
-          audio_s3_key: `tts/${cognitoSub}/${Date.now()}.mp3`,
-          audio_url: mockAudio,
-          audio_file_size: Math.floor(text.length * 1250),
-          created_at: Date.now()
-        };
-        setTtsHistory(prev => [newHistoryItem, ...prev]);
+        setTtsHistory((previous) => [mapTtsHistory(result), ...previous]);
       }
-    }, 1200);
+    } catch (error) {
+      setIsGenerating(false);
+      alert(error instanceof Error ? error.message : 'Không thể tạo audio.');
+    }
   };
 
   // Toggle Audio Playback
@@ -271,53 +311,36 @@ function App() {
     }
   };
 
-  const handleTranscribe = () => {
+  const handleTranscribe = async () => {
     if (!sttFile) {
       alert('Vui lòng chọn file âm thanh!');
       return;
     }
 
     setIsTranscribing(true);
-    setTranscribeProgress(10);
-
-    const interval = setInterval(() => {
-      setTranscribeProgress(prev => {
-        if (prev >= 90) {
-          clearInterval(interval);
-          return 95;
-        }
-        return prev + 25;
-      });
-    }, 400);
-
-    setTimeout(() => {
-      clearInterval(interval);
+    setTranscribeProgress(30);
+    try {
+      const result = await createStt(sttFile);
       setTranscribeProgress(100);
       setIsTranscribing(false);
-
-      const result = `[Bản bóc băng tự động cho ${sttFile.name}]\n\nHello, this is Amazon Transcribe converting your spoken audio into clear text. Everything processed securely with AWS Polly Voice backend infrastructure.`;
-      setSttResultText(result);
-
+      setSttResultText(result.resultText || 'Job đang xử lý. Xem trạng thái trong lịch sử.');
       if (userRole === 'user') {
-        const newSttItem: STTHistoryItem = {
-          id: 'stt-' + Date.now(),
-          file_name: sttFile.name,
-          audio_s3_key: `stt/${cognitoSub}/${sttFile.name}`,
-          audio_file_size: sttFile.size,
-          result_text: result,
-          created_at: Date.now()
-        };
-        setSttHistory(prev => [newSttItem, ...prev]);
+        setSttHistory((previous) => [mapSttHistory(result), ...previous]);
       }
-    }, 2200);
+    } catch (error) {
+      setIsTranscribing(false);
+      alert(error instanceof Error ? error.message : 'Không thể xử lý audio.');
+    }
   };
 
   // Delete History Item
-  const handleDeleteTtsHistory = (id: string) => {
-    setTtsHistory(prev => prev.filter(item => item.id !== id));
+  const handleDeleteTtsHistory = async (id: string) => {
+    await deleteTtsHistory(id);
+    setTtsHistory((previous) => previous.filter((item) => item.id !== id));
   };
-  const handleDeleteSttHistory = (id: string) => {
-    setSttHistory(prev => prev.filter(item => item.id !== id));
+  const handleDeleteSttHistory = async (id: string) => {
+    await deleteSttHistory(id);
+    setSttHistory((previous) => previous.filter((item) => item.id !== id));
   };
 
   // Format Helper
@@ -690,7 +713,7 @@ function App() {
         {activeTab === 'history' && userRole === 'user' && (
           <div className="history-container glass-panel">
             <div className="history-header">
-              <h2>Lịch Sử Chuyển Đổi (Amazon DynamoDB)</h2>
+              <h2>Lịch Sử Chuyển Đổi (MongoDB)</h2>
               <div className="history-tab-buttons">
                 <button 
                   className={`subtab-btn ${historyTab === 'tts' ? 'active' : ''}`}
