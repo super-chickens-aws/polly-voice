@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { optionalAuth, requireAuth } from './auth.js';
 import { AppError } from './errors.js';
 import { mediaStorage } from './media.js';
-import { TtsHistory } from './models.js';
+import { ttsHistoryStore, type TtsHistoryItem } from './models.js';
 import { speechService } from './speech.js';
 import type { AuthenticatedRequest, TtsSettings } from './types.js';
 
@@ -36,10 +36,10 @@ const createSchema = z.object({
   })
 });
 
-async function responseFor(document: Record<string, unknown>) {
-  const key = String(document.audioStorageKey);
+async function responseFor(document: TtsHistoryItem) {
+  const key = document.audioStorageKey;
   return {
-    id: String(document._id),
+    id: document._id,
     status: document.status,
     text: document.textContent,
     voice: document.voice,
@@ -77,7 +77,7 @@ async function createTts(req: AuthenticatedRequest, preview: boolean) {
   const createdAt = new Date();
 
   if (!preview && req.user.authenticated) {
-    await TtsHistory.create({
+    await ttsHistoryStore.create({
       _id: id,
       userId: req.user.id,
       textContent: input.text,
@@ -91,8 +91,8 @@ async function createTts(req: AuthenticatedRequest, preview: boolean) {
       audioFileSize: media.size,
       characterCount: input.text.length,
       status: 'COMPLETED',
-      createdAt,
-      updatedAt: createdAt
+      createdAt: createdAt.toISOString(),
+      updatedAt: createdAt.toISOString()
     });
   }
   return {
@@ -128,8 +128,7 @@ ttsRouter.get('/tts/history', requireAuth, async (req, res, next) => {
     const user = (req as AuthenticatedRequest).user;
     const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100);
     const page = Math.max(Number(req.query.page) || 0, 0);
-    const docs = await TtsHistory.find({ userId: user.id, deletedAt: null })
-      .sort({ createdAt: -1 }).skip(page * limit).limit(limit).lean();
+    const docs = await ttsHistoryStore.list(user.id, page, limit);
     res.json({ data: await Promise.all(docs.map((doc) => responseFor(doc))) });
   } catch (error) { next(error); }
 });
@@ -137,7 +136,7 @@ ttsRouter.get('/tts/history', requireAuth, async (req, res, next) => {
 ttsRouter.get('/tts/:id', requireAuth, async (req, res, next) => {
   try {
     const user = (req as AuthenticatedRequest).user;
-    const doc = await TtsHistory.findOne({ _id: req.params.id, userId: user.id, deletedAt: null }).lean();
+    const doc = await ttsHistoryStore.get(user.id, String(req.params.id));
     if (!doc) throw new AppError(404, 'TTS_NOT_FOUND', 'Không tìm thấy lịch sử TTS.');
     res.json({ data: await responseFor(doc) });
   } catch (error) { next(error); }
@@ -146,7 +145,7 @@ ttsRouter.get('/tts/:id', requireAuth, async (req, res, next) => {
 ttsRouter.get('/tts/:id/download', requireAuth, async (req, res, next) => {
   try {
     const user = (req as AuthenticatedRequest).user;
-    const doc = await TtsHistory.findOne({ _id: req.params.id, userId: user.id, deletedAt: null }).lean();
+    const doc = await ttsHistoryStore.get(user.id, String(req.params.id));
     if (!doc) throw new AppError(404, 'TTS_NOT_FOUND', 'Không tìm thấy lịch sử TTS.');
     res.json({ data: { downloadUrl: await mediaStorage.downloadUrl(doc.audioStorageKey), expiresIn: 900 } });
   } catch (error) { next(error); }
@@ -155,11 +154,8 @@ ttsRouter.get('/tts/:id/download', requireAuth, async (req, res, next) => {
 ttsRouter.delete('/tts/:id', requireAuth, async (req, res, next) => {
   try {
     const user = (req as AuthenticatedRequest).user;
-    const doc = await TtsHistory.findOneAndUpdate(
-      { _id: req.params.id, userId: user.id, deletedAt: null },
-      { deletedAt: new Date() }
-    );
-    if (!doc) throw new AppError(404, 'TTS_NOT_FOUND', 'Không tìm thấy lịch sử TTS.');
+    const deleted = await ttsHistoryStore.softDelete(user.id, String(req.params.id));
+    if (!deleted) throw new AppError(404, 'TTS_NOT_FOUND', 'Không tìm thấy lịch sử TTS.');
     res.status(204).end();
   } catch (error) { next(error); }
 });

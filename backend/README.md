@@ -1,6 +1,6 @@
 # Polly Voice Backend
 
-Node.js + Express + TypeScript API dùng MongoDB. Chạy local với media giả lập hoặc chạy AWS với Polly, Transcribe, S3, Cognito, Lambda và API Gateway.
+Node.js + Express + TypeScript API dùng DynamoDB. Chạy local với dữ liệu/media giả lập hoặc chạy AWS với DynamoDB, Polly, Transcribe, S3, Cognito, Lambda và API Gateway.
 
 ```powershell
 Copy-Item .env.example .env

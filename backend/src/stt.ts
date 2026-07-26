@@ -11,7 +11,7 @@ import { requireAuth } from './auth.js';
 import { config } from './config.js';
 import { AppError } from './errors.js';
 import { mediaStorage } from './media.js';
-import { SttHistory } from './models.js';
+import { sttHistoryStore, type SttHistoryItem } from './models.js';
 import type { AuthenticatedRequest } from './types.js';
 
 const upload = multer({
@@ -24,27 +24,28 @@ const upload = multer({
 });
 const transcribe = new TranscribeClient({ region: config.aws.region });
 
-async function refreshAwsResult(document: any): Promise<void> {
-  if (!config.aws.enabled || !document.transcriptionJobName || document.status === 'COMPLETED') return;
+async function refreshAwsResult(document: SttHistoryItem): Promise<SttHistoryItem> {
+  if (!config.aws.enabled || !document.transcriptionJobName || document.status === 'COMPLETED') return document;
   const response = await transcribe.send(new GetTranscriptionJobCommand({
     TranscriptionJobName: document.transcriptionJobName
   }));
   const job = response.TranscriptionJob;
   if (job?.TranscriptionJobStatus === 'FAILED') {
-    document.status = 'FAILED';
-    await document.save();
+    return sttHistoryStore.update(document, { status: 'FAILED' });
   }
   if (job?.TranscriptionJobStatus === 'COMPLETED' && document.resultStorageKey) {
     const raw = await mediaStorage.get(document.resultStorageKey);
     const json = JSON.parse(raw.toString('utf8'));
-    document.resultText = json.results?.transcripts?.[0]?.transcript ?? '';
-    document.status = 'COMPLETED';
-    await document.save();
+    return sttHistoryStore.update(document, {
+      resultText: json.results?.transcripts?.[0]?.transcript ?? '',
+      status: 'COMPLETED'
+    });
   }
+  return document;
 }
 
-async function sttResponse(document: any) {
-  await refreshAwsResult(document);
+async function sttResponse(input: SttHistoryItem) {
+  const document = await refreshAwsResult(input);
   return {
     id: String(document._id),
     fileName: document.fileName,
@@ -91,7 +92,8 @@ sttRouter.post('/stt', requireAuth, upload.single('file'), async (req, res, next
       await mediaStorage.save(resultStorageKey, Buffer.from(resultText, 'utf8'), 'text/plain');
     }
 
-    const document = await SttHistory.create({
+    const createdAt = new Date().toISOString();
+    const document = await sttHistoryStore.create({
       _id: id,
       userId: user.id,
       fileName: req.file.originalname,
@@ -100,7 +102,9 @@ sttRouter.post('/stt', requireAuth, upload.single('file'), async (req, res, next
       resultText,
       audioFileSize: req.file.size,
       transcriptionJobName,
-      status
+      status: status as SttHistoryItem['status'],
+      createdAt,
+      updatedAt: createdAt
     });
     res.status(202).json({ data: await sttResponse(document) });
   } catch (error) { next(error); }
@@ -111,8 +115,7 @@ sttRouter.get('/stt/history', requireAuth, async (req, res, next) => {
     const user = (req as AuthenticatedRequest).user;
     const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100);
     const page = Math.max(Number(req.query.page) || 0, 0);
-    const docs = await SttHistory.find({ userId: user.id, deletedAt: null })
-      .sort({ createdAt: -1 }).skip(page * limit).limit(limit);
+    const docs = await sttHistoryStore.list(user.id, page, limit);
     res.json({ data: await Promise.all(docs.map(sttResponse)) });
   } catch (error) { next(error); }
 });
@@ -120,7 +123,7 @@ sttRouter.get('/stt/history', requireAuth, async (req, res, next) => {
 sttRouter.get('/stt/:id', requireAuth, async (req, res, next) => {
   try {
     const user = (req as AuthenticatedRequest).user;
-    const doc = await SttHistory.findOne({ _id: req.params.id, userId: user.id, deletedAt: null });
+    const doc = await sttHistoryStore.get(user.id, String(req.params.id));
     if (!doc) throw new AppError(404, 'STT_NOT_FOUND', 'Không tìm thấy lịch sử STT.');
     res.json({ data: await sttResponse(doc) });
   } catch (error) { next(error); }
@@ -129,7 +132,7 @@ sttRouter.get('/stt/:id', requireAuth, async (req, res, next) => {
 sttRouter.get('/stt/:id/download', requireAuth, async (req, res, next) => {
   try {
     const user = (req as AuthenticatedRequest).user;
-    const doc = await SttHistory.findOne({ _id: req.params.id, userId: user.id, deletedAt: null });
+    const doc = await sttHistoryStore.get(user.id, String(req.params.id));
     if (!doc?.resultStorageKey) throw new AppError(404, 'STT_RESULT_NOT_FOUND', 'Kết quả STT chưa sẵn sàng.');
     res.json({ data: { downloadUrl: await mediaStorage.downloadUrl(doc.resultStorageKey), expiresIn: 900 } });
   } catch (error) { next(error); }
@@ -138,11 +141,8 @@ sttRouter.get('/stt/:id/download', requireAuth, async (req, res, next) => {
 sttRouter.delete('/stt/:id', requireAuth, async (req, res, next) => {
   try {
     const user = (req as AuthenticatedRequest).user;
-    const doc = await SttHistory.findOneAndUpdate(
-      { _id: req.params.id, userId: user.id, deletedAt: null },
-      { deletedAt: new Date() }
-    );
-    if (!doc) throw new AppError(404, 'STT_NOT_FOUND', 'Không tìm thấy lịch sử STT.');
+    const deleted = await sttHistoryStore.softDelete(user.id, String(req.params.id));
+    if (!deleted) throw new AppError(404, 'STT_NOT_FOUND', 'Không tìm thấy lịch sử STT.');
     res.status(204).end();
   } catch (error) { next(error); }
 });

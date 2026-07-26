@@ -1,6 +1,6 @@
 # AWS Setup
 
-Hướng dẫn AWS CLI, S3, Cognito, MongoDB Atlas, SAM/Lambda, API Gateway và frontend production đã được hợp nhất vào mục **Triển khai AWS A–Z (`eu-north-1`)** trong [README gốc](../README.md).
+Hướng dẫn AWS CLI, S3, DynamoDB, Cognito, SAM/Lambda, API Gateway và frontend production đã được hợp nhất vào mục **Triển khai AWS A–Z (`eu-north-1`)** trong [README gốc](../README.md).
 
 Thông tin an toàn có thể chia sẻ:
 
@@ -14,7 +14,6 @@ Thông tin an toàn có thể chia sẻ:
 Không gửi hoặc commit:
 
 - AWS Secret Access Key
-- MongoDB password/connection string
 - JWT, refresh token hoặc presigned URL còn hiệu lực
 - File `.env` thật
 

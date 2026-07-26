@@ -14,7 +14,7 @@
 flowchart LR
   U["Người dùng"] --> R["React + Vite"]
   R --> A["Node.js + Express API"]
-  A --> M[("MongoDB")]
+  A --> D[("Amazon DynamoDB")]
   A --> P["Amazon Polly"]
   A --> T["Amazon Transcribe"]
   A --> S["Amazon S3"]
@@ -27,7 +27,7 @@ flowchart LR
 |---|---|---|
 | Frontend | React 19, TypeScript, Vite | Giao diện TTS, STT, đăng nhập và lịch sử |
 | Backend | Node.js 20+, Express, TypeScript | REST API, xác thực, điều phối AWS |
-| Database | MongoDB 7 / MongoDB Atlas | Lưu lịch sử và trạng thái xử lý |
+| Database | Amazon DynamoDB (on-demand) | Lưu lịch sử và trạng thái xử lý |
 | Media | Ổ đĩa local / Amazon S3 | Lưu audio và kết quả STT |
 | TTS | Bộ tạo WAV giả lập / Amazon Polly | Sinh âm thanh |
 | STT | Kết quả giả lập / Amazon Transcribe | Chuyển audio thành text |
@@ -61,13 +61,12 @@ polly-voice/
 │  │  ├─ server.ts          # Local server
 │  │  ├─ lambda.ts          # AWS Lambda entry
 │  │  ├─ auth.ts            # JWT Cognito / local auth
-│  │  ├─ models.ts          # MongoDB models
+│  │  ├─ models.ts          # DynamoDB repository
 │  │  ├─ speech.ts          # Polly / mock TTS
 │  │  ├─ media.ts           # S3 / local storage
 │  │  ├─ tts.ts             # TTS endpoints
 │  │  └─ stt.ts             # Transcribe endpoints
 │  ├─ template.yaml         # AWS SAM
-│  ├─ docker-compose.yml    # MongoDB local
 │  └─ .env.example
 └─ README.md
 ```
@@ -123,20 +122,9 @@ Invoke-RestMethod `
 
 - Node.js `20.19+` (khuyến nghị Node.js 22 LTS).
 - npm.
-- Docker Desktop.
 - Git.
 
-### Bước 1 — MongoDB
-
-```powershell
-cd backend
-docker compose up -d
-docker compose ps
-```
-
-MongoDB chạy tại `mongodb://localhost:27017/polly_voice`.
-
-### Bước 2 — Backend
+### Bước 1 — Backend
 
 ```powershell
 cd backend
@@ -153,7 +141,7 @@ Invoke-RestMethod http://localhost:8080/health
 
 Ở chế độ local, backend tạo WAV thử nghiệm và lưu trong `backend/data/media`; không phát sinh phí AWS.
 
-### Bước 3 — Frontend
+### Bước 2 — Frontend
 
 ```powershell
 cd frontend
@@ -164,7 +152,7 @@ npm run dev
 
 Mở `http://localhost:5173`. Có thể dùng bất kỳ username/password nào ở chế độ local.
 
-### Bước 4 — Kiểm tra
+### Bước 3 — Kiểm tra
 
 ```powershell
 cd backend
@@ -254,21 +242,7 @@ $clientId = aws cognito-idp create-user-pool-client `
 
 React là public client nên không tạo client secret. Giao diện hiện tại dùng SRP, không cần Cognito Hosted UI/domain.
 
-### 6.5 Tạo MongoDB Atlas
-
-1. Tạo tài khoản/project tại MongoDB Atlas.
-2. Tạo cluster M0/M2 ở AWS, chọn vùng gần `eu-north-1` nhất mà Atlas cung cấp.
-3. Tạo Database User với mật khẩu mạnh.
-4. Network Access: cho phép IP cần thiết. Để Lambda truy cập ổn định trong production, ưu tiên VPC peering/private endpoint hoặc Lambda trong VPC có NAT và IP cố định.
-5. Copy connection string và thay `<password>`:
-
-```text
-mongodb+srv://polly_voice_user:<password>@<cluster>/polly_voice?retryWrites=true&w=majority
-```
-
-Không commit URI này. Tham số SAM được đánh dấu `NoEcho`, nhưng production nên chuyển sang AWS Secrets Manager.
-
-### 6.6 Deploy backend bằng SAM
+### 6.5 Deploy backend bằng SAM
 
 ```powershell
 cd backend
@@ -282,8 +256,8 @@ Nhập:
 ```text
 Stack Name: polly-voice-api
 AWS Region: eu-north-1
-Parameter MongoDbUri: <MongoDB Atlas URI>
 Parameter MediaBucketName: <tên bucket>
+Parameter HistoryTableName: polly-voice-history
 Parameter CognitoUserPoolId: <POOL_ID>
 Parameter CognitoClientId: <CLIENT_ID>
 Parameter AllowedOrigins: http://localhost:5173
@@ -303,7 +277,7 @@ $apiUrl = aws cloudformation describe-stacks `
 $apiUrl
 ```
 
-### 6.7 Cấu hình và build React cho AWS
+### 6.6 Cấu hình và build React cho AWS
 
 Sửa `frontend/.env.production`:
 
@@ -325,7 +299,7 @@ npm run build
 
 Thư mục cần deploy là `frontend/dist`. Có thể đưa lên AWS Amplify Hosting hoặc S3 + CloudFront. Sau khi có domain thật, chạy lại `sam deploy` và đổi `AllowedOrigins` thành domain đó.
 
-### 6.8 Kiểm tra production
+### 6.7 Kiểm tra production
 
 ```powershell
 Invoke-RestMethod "$apiUrl/health"
@@ -336,7 +310,7 @@ aws logs tail /aws/lambda/polly-voice-api-PollyVoiceFunction `
 Đăng ký tài khoản trên giao diện, nhập mã xác nhận email, đăng nhập, tạo TTS và kiểm tra:
 
 - File xuất hiện trong S3.
-- Lịch sử xuất hiện trong MongoDB Atlas.
+- Lịch sử xuất hiện trong bảng DynamoDB `polly-voice-history`.
 - Audio nghe và tải được qua presigned URL.
 - Upload STT chuyển từ `PROCESSING` sang `COMPLETED`.
 
@@ -346,7 +320,7 @@ aws logs tail /aws/lambda/polly-voice-api-PollyVoiceFunction `
 
 | Biến | Local | AWS |
 |---|---|---|
-| `MONGODB_URI` | Mongo local | MongoDB Atlas URI |
+| `AWS_DYNAMODB_TABLE_NAME` | Không dùng khi mock local | Tên bảng DynamoDB |
 | `AWS_ENABLED` | `false` | `true` |
 | `AWS_REGION` | `eu-north-1` | `eu-north-1` |
 | `AWS_S3_MEDIA_BUCKET` | trống | Tên S3 bucket |
@@ -368,12 +342,6 @@ aws logs tail /aws/lambda/polly-voice-api-PollyVoiceFunction `
 ## 8. Lệnh vận hành
 
 ```powershell
-# Dừng MongoDB local nhưng giữ dữ liệu
-docker compose -f backend/docker-compose.yml down
-
-# Xóa cả volume MongoDB local (mất dữ liệu)
-docker compose -f backend/docker-compose.yml down -v
-
 # Xem Lambda log
 aws logs tail /aws/lambda/<FUNCTION_NAME> --follow --region eu-north-1
 
@@ -391,4 +359,3 @@ sam deploy
 - [Cài AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html)
 - [Cognito app client](https://docs.aws.amazon.com/cognito/latest/developerguide/user-pool-settings-client-apps.html)
 - [Danh sách giọng Amazon Polly](https://docs.aws.amazon.com/polly/latest/dg/available-voices.html)
-

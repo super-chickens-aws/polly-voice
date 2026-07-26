@@ -3,11 +3,11 @@ Transform: AWS::Serverless-2016-10-31
 Description: Polly Voice Node.js API
 
 Parameters:
-  MongoDbUri:
-    Type: String
-    NoEcho: true
   MediaBucketName:
     Type: String
+  HistoryTableName:
+    Type: String
+    Default: polly-voice-history
   CognitoUserPoolId:
     Type: String
   CognitoClientId:
@@ -28,6 +28,35 @@ Globals:
     Tracing: Active
 
 Resources:
+  HistoryTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Ref HistoryTableName
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+        - AttributeName: entityId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: EntityIndex
+          KeySchema:
+            - AttributeName: entityId
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+      SSESpecification:
+        SSEEnabled: true
+
   MediaBucket:
     Type: AWS::S3::Bucket
     DeletionPolicy: Retain
@@ -99,9 +128,9 @@ Resources:
       Environment:
         Variables:
           NODE_ENV: production
-          MONGODB_URI: !Ref MongoDbUri
           AWS_ENABLED: "true"
           AWS_REGION: !Ref AWS::Region
+          AWS_DYNAMODB_TABLE_NAME: !Ref HistoryTable
           AWS_S3_MEDIA_BUCKET: !Ref MediaBucketName
           AWS_COGNITO_USER_POOL_ID: !Ref CognitoUserPoolId
           AWS_COGNITO_CLIENT_ID: !Ref CognitoClientId
@@ -110,6 +139,8 @@ Resources:
           ALLOWED_ORIGINS: !Ref AllowedOrigins
           PUBLIC_BASE_URL: https://placeholder.invalid
       Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref HistoryTable
         - S3CrudPolicy:
             BucketName: !Ref MediaBucket
         - Statement:
@@ -130,3 +161,5 @@ Outputs:
     Value: !Ref PollyVoiceFunction
   MediaBucket:
     Value: !Ref MediaBucket
+  HistoryTable:
+    Value: !Ref HistoryTable
