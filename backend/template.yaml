@@ -15,16 +15,42 @@ Parameters:
   AllowedOrigins:
     Type: String
     Default: http://localhost:5173
+  TranscribeLanguageCode:
+    Type: String
+    Default: en-US
 
 Globals:
   Function:
-    Runtime: nodejs20.x
+    Runtime: nodejs22.x
     Architectures: [arm64]
     Timeout: 60
     MemorySize: 1024
     Tracing: Active
 
 Resources:
+  MediaBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Ref MediaBucketName
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders: ["*"]
+            AllowedMethods: [GET, HEAD]
+            AllowedOrigins:
+              - !Ref AllowedOrigins
+            MaxAge: 3600
+
   PollyVoiceApi:
     Type: AWS::Serverless::HttpApi
     Properties:
@@ -80,11 +106,12 @@ Resources:
           AWS_COGNITO_USER_POOL_ID: !Ref CognitoUserPoolId
           AWS_COGNITO_CLIENT_ID: !Ref CognitoClientId
           AWS_COGNITO_ISSUER_URI: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${CognitoUserPoolId}
+          AWS_TRANSCRIBE_LANGUAGE_CODE: !Ref TranscribeLanguageCode
           ALLOWED_ORIGINS: !Ref AllowedOrigins
           PUBLIC_BASE_URL: https://placeholder.invalid
       Policies:
         - S3CrudPolicy:
-            BucketName: !Ref MediaBucketName
+            BucketName: !Ref MediaBucket
         - Statement:
             - Effect: Allow
               Action:
@@ -101,3 +128,5 @@ Outputs:
     Value: !Sub https://${PollyVoiceApi}.execute-api.${AWS::Region}.amazonaws.com
   FunctionName:
     Value: !Ref PollyVoiceFunction
+  MediaBucket:
+    Value: !Ref MediaBucket
