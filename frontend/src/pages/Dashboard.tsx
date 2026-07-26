@@ -1,54 +1,9 @@
-// import { useEffect, useState } from "react";
-// import { hello } from "../services/api";
-// import { logout } from "../services/auth";
-// import { useNavigate } from "react-router-dom";
-// function Dashboard() {
-//   const [message, setMessage] = useState("");
-
-//   const navigate = useNavigate();
-
-//   async function handleLogout() {
-
-//     await logout();
-
-//     navigate("/");
-
-// }
-
-//   useEffect(() => {
-//     load();
-//   }, []);
-
-//   async function load() {
-//     try {
-//       const data = await hello();
-//       setMessage(data.message);
-//     } catch (err) {
-//       setMessage("Cannot call API");
-//     }
-//   }
-
-//   return (
-//     <div style={{ padding: 30 }}>
-//       <h1>Dashboard</h1>
-
-//       <p>{message}</p>
-
-//       <button onClick={handleLogout}>
-//     Logout
-// </button>
-//     </div>
-//   );
-
-  
-
-// }
-
-// export default Dashboard;
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+
 import { logout } from "../services/auth";
 import { getProfile } from "../services/profile";
-import { useNavigate } from "react-router-dom";
+import { tts } from "../services/tts";
 
 export default function Dashboard() {
 
@@ -56,13 +11,15 @@ export default function Dashboard() {
 
     const [user, setUser] = useState<any>(null);
 
+    const [text, setText] = useState("");
+
     useEffect(() => {
 
-        load();
+        loadProfile();
 
     }, []);
 
-    async function load() {
+    async function loadProfile() {
 
         try {
 
@@ -70,9 +27,7 @@ export default function Dashboard() {
 
             setUser(data);
 
-        }
-
-        catch (error) {
+        } catch (error) {
 
             console.error(error);
 
@@ -80,6 +35,76 @@ export default function Dashboard() {
 
         }
 
+    }
+
+//     async function handleGenerate() {
+
+//     if (!text.trim()) {
+
+//         alert("Please enter some text.");
+
+//         return;
+
+//     }
+
+//     try {
+
+//         const data = await tts(text);
+
+//         const response = await fetch(data.audioUrl);
+
+//         const blob = await response.blob();
+
+//         const url = window.URL.createObjectURL(blob);
+
+//         const link = document.createElement("a");
+
+//         link.href = url;
+
+//         link.download = "speech.mp3";
+
+//         document.body.appendChild(link);
+
+//         link.click();
+
+//         document.body.removeChild(link);
+
+//         window.URL.revokeObjectURL(url);
+
+//     } catch (error) {
+
+//         console.error(error);
+
+//         alert("Generate failed");
+
+//     }
+
+// }
+    async function handleGenerate() {
+
+        if (!text.trim()) {
+            alert("Please enter some text.");
+            return;
+        }
+
+        try {
+            const data = await tts(text);
+            const a = document.createElement("a");
+            a.href = data.downloadUrl;
+            a.target = "_self";
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }
+
+        catch (error) {
+            console.error(error);
+            alert("Generate failed");
+        }
+    }
+
+    function handlePreview() {
+        alert("Preview feature will be implemented in /tts/preview.");
     }
 
     async function handleLogout() {
@@ -92,17 +117,60 @@ export default function Dashboard() {
 
     return (
 
-        <div style={{ padding: 30 }}>
+        <div style={{ padding: 30, maxWidth: 700 }}>
 
             <h1>Dashboard</h1>
 
-            <p>Email: {user?.email}</p>
+            <hr />
 
-            <p>Display Name: {user?.displayName || "-"}</p>
+            <h2>User</h2>
 
-            <p>Role: {user?.role}</p>
+            <p><b>Email:</b> {user?.email}</p>
 
-            <button onClick={handleLogout}>
+            <p><b>Display Name:</b> {user?.displayName || "-"}</p>
+
+            <p><b>Role:</b> {user?.role}</p>
+
+            <hr />
+
+            <h2>Text To Speech</h2>
+
+            <textarea
+
+                rows={8}
+
+                style={{ width: "100%" }}
+
+                placeholder="Enter text..."
+
+                value={text}
+
+                onChange={(e) => setText(e.target.value)}
+
+            />
+
+            <br /><br />
+
+            <button
+                onClick={handlePreview}
+                disabled
+            >
+                Preview (Coming Soon)
+            </button>
+
+            {" "}
+
+            <button
+                onClick={handleGenerate}
+            >
+                Generate & Download
+            </button>
+
+            <hr />
+
+            <button
+                onClick={handleLogout}
+            >
                 Logout
             </button>
 
