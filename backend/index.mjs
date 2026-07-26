@@ -10,6 +10,37 @@ export const handler = async (event) => {
     const path = event.requestContext.http.path;
 
     // =============================
+// POST /tts/preview
+// =============================
+if (path === "/tts/preview") {
+
+    const body = JSON.parse(event.body);
+
+    const text = body.text;
+
+    const audioStream = await generateSpeech(text);
+
+    const bytes = await audioStream.transformToByteArray();
+
+    return {
+
+        statusCode: 200,
+
+        headers: {
+
+            "Content-Type": "audio/mpeg"
+
+        },
+
+        isBase64Encoded: true,
+
+        body: Buffer.from(bytes).toString("base64")
+
+    };
+
+}
+
+    // =============================
     // POST /tts
     // =============================
     if (path === "/tts") {
@@ -39,25 +70,25 @@ export const handler = async (event) => {
         // };
         const key = await uploadAudio(audioStream, fileName);
 
-const downloadUrl = await getDownloadUrl(key);
+        const downloadUrl = await getDownloadUrl(key);
 
-return {
+        return {
 
-    statusCode: 200,
+            statusCode: 200,
 
-    headers: {
+            headers: {
 
-        "Content-Type": "application/json"
+                "Content-Type": "application/json"
 
-    },
+            },
 
-    body: JSON.stringify({
+            body: JSON.stringify({
 
-        downloadUrl
+                downloadUrl
 
-    })
+            })
 
-};
+        };
 
     }
 

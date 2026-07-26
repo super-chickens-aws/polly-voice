@@ -1,0 +1,4 @@
+POST https://6s17a1vkea.execute-api.ap-southeast-1.amazonaws.com/tts/preview
+{
+    "text":"Hello AWS Polly"
+}

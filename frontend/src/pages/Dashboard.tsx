@@ -5,6 +5,8 @@ import { logout } from "../services/auth";
 import { getProfile } from "../services/profile";
 import { tts } from "../services/tts";
 
+import { preview } from "../services/preview";
+
 export default function Dashboard() {
 
     const navigate = useNavigate();
@@ -12,6 +14,8 @@ export default function Dashboard() {
     const [user, setUser] = useState<any>(null);
 
     const [text, setText] = useState("");
+
+    const [previewUrl, setPreviewUrl] = useState("");
 
     useEffect(() => {
 
@@ -37,49 +41,6 @@ export default function Dashboard() {
 
     }
 
-//     async function handleGenerate() {
-
-//     if (!text.trim()) {
-
-//         alert("Please enter some text.");
-
-//         return;
-
-//     }
-
-//     try {
-
-//         const data = await tts(text);
-
-//         const response = await fetch(data.audioUrl);
-
-//         const blob = await response.blob();
-
-//         const url = window.URL.createObjectURL(blob);
-
-//         const link = document.createElement("a");
-
-//         link.href = url;
-
-//         link.download = "speech.mp3";
-
-//         document.body.appendChild(link);
-
-//         link.click();
-
-//         document.body.removeChild(link);
-
-//         window.URL.revokeObjectURL(url);
-
-//     } catch (error) {
-
-//         console.error(error);
-
-//         alert("Generate failed");
-
-//     }
-
-// }
     async function handleGenerate() {
 
         if (!text.trim()) {
@@ -103,9 +64,33 @@ export default function Dashboard() {
         }
     }
 
-    function handlePreview() {
-        alert("Preview feature will be implemented in /tts/preview.");
+async function handlePreview() {
+
+    if (!text.trim()) {
+
+        alert("Please enter some text.");
+
+        return;
+
     }
+
+    try {
+
+        const url = await preview(text);
+
+        setPreviewUrl(url);
+
+    }
+
+    catch (error) {
+
+        console.error(error);
+
+        alert("Preview failed");
+
+    }
+
+}
 
     async function handleLogout() {
 
@@ -152,11 +137,10 @@ export default function Dashboard() {
             <br /><br />
 
             <button
-                onClick={handlePreview}
-                disabled
-            >
-                Preview (Coming Soon)
-            </button>
+    onClick={handlePreview}
+>
+    Preview
+</button>
 
             {" "}
 
@@ -167,6 +151,24 @@ export default function Dashboard() {
             </button>
 
             <hr />
+
+            <br /><br />
+
+{
+    previewUrl && (
+
+        <audio
+
+            controls
+
+            src={previewUrl}
+
+            style={{ width: "100%" }}
+
+        />
+
+    )
+}
 
             <button
                 onClick={handleLogout}
