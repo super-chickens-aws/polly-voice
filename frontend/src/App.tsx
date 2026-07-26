@@ -10,7 +10,14 @@ import {
   type SttResult,
   type TtsResult
 } from './api';
-import { currentUser, signIn, signOut, signUp } from './auth';
+import {
+  confirmSignUp,
+  currentUser,
+  resendConfirmationCode,
+  signIn,
+  signOut,
+  signUp
+} from './auth';
 
 // Types
 type EngineType = 'neural' | 'standard' | 'long-form';
@@ -44,13 +51,16 @@ function App() {
   const [userEmail, setUserEmail] = useState<string>('');
   const [cognitoSub, setCognitoSub] = useState<string>('');
   const [showAuthModal, setShowAuthModal] = useState<boolean>(false);
-  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+  const [authMode, setAuthMode] = useState<'login' | 'register' | 'confirm'>('login');
   
   // Auth Form State
   const [authEmailInput, setAuthEmailInput] = useState('');
   const [authPasswordInput, setAuthPasswordInput] = useState('');
   const [authNameInput, setAuthNameInput] = useState('');
+  const [authConfirmationCode, setAuthConfirmationCode] = useState('');
   const [authError, setAuthError] = useState('');
+  const [authMessage, setAuthMessage] = useState('');
+  const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
 
   // TTS State
   const [engine, setEngine] = useState<EngineType>('neural');
@@ -190,18 +200,46 @@ function App() {
   // Handle Login / Register with Cognito (or local mode)
   const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!authEmailInput || !authPasswordInput) {
-      setAuthError('Vui lòng nhập đầy đủ Email và Mật khẩu');
-      return;
-    }
-    if (authPasswordInput.length < 8) {
-      setAuthError('Mật khẩu tối thiểu 8 ký tự');
+    setAuthError('');
+    setAuthMessage('');
+
+    if (authMode === 'confirm') {
+      if (!authEmailInput || !authConfirmationCode.trim()) {
+        setAuthError('Vui lòng nhập email và mã xác nhận.');
+        return;
+      }
+      setIsAuthSubmitting(true);
+      try {
+        await confirmSignUp(authEmailInput, authConfirmationCode);
+        setAuthMode('login');
+        setAuthConfirmationCode('');
+        setAuthMessage('Xác nhận email thành công. Bạn có thể đăng nhập.');
+      } catch (error) {
+        setAuthError(error instanceof Error ? error.message : 'Không thể xác nhận tài khoản.');
+      } finally {
+        setIsAuthSubmitting(false);
+      }
       return;
     }
 
+    if (!authEmailInput || !authPasswordInput) {
+      setAuthError('Vui lòng nhập đầy đủ email và mật khẩu.');
+      return;
+    }
+    if (authPasswordInput.length < 8) {
+      setAuthError('Mật khẩu tối thiểu 8 ký tự.');
+      return;
+    }
+
+    setIsAuthSubmitting(true);
     try {
       if (authMode === 'register') {
-        await signUp(authNameInput, authEmailInput, authPasswordInput);
+        const result = await signUp(authNameInput, authEmailInput, authPasswordInput);
+        if (result === 'confirmation-required') {
+          setAuthMode('confirm');
+          setAuthMessage(`Mã xác nhận đã được gửi tới ${authEmailInput}.`);
+          return;
+        }
       }
       const session = await signIn(authEmailInput, authPasswordInput);
       setUserRole('user');
@@ -211,7 +249,33 @@ function App() {
       setAuthError('');
       await loadHistory();
     } catch (error) {
-      setAuthError(error instanceof Error ? error.message : 'Không thể đăng nhập.');
+      const message = error instanceof Error ? error.message : 'Không thể đăng nhập.';
+      if (message.toLowerCase().includes('not confirmed')) {
+        setAuthMode('confirm');
+        setAuthMessage('Tài khoản chưa được xác nhận. Nhập mã trong email hoặc yêu cầu gửi lại mã.');
+      } else {
+        setAuthError(message);
+      }
+    } finally {
+      setIsAuthSubmitting(false);
+    }
+  };
+
+  const handleResendConfirmationCode = async () => {
+    if (!authEmailInput) {
+      setAuthError('Vui lòng nhập email.');
+      return;
+    }
+    setIsAuthSubmitting(true);
+    setAuthError('');
+    setAuthMessage('');
+    try {
+      await resendConfirmationCode(authEmailInput);
+      setAuthMessage(`Đã gửi lại mã xác nhận tới ${authEmailInput}.`);
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : 'Không thể gửi lại mã xác nhận.');
+    } finally {
+      setIsAuthSubmitting(false);
     }
   };
 
@@ -832,9 +896,14 @@ function App() {
         <div className="modal-backdrop">
           <div className="modal-content glass-panel">
             <button className="modal-close" onClick={() => setShowAuthModal(false)}>✕</button>
-            <h2>{authMode === 'login' ? '🔑 Đăng Nhập Amazon Cognito' : '📝 Đăng Ký Tài Khoản'}</h2>
+            <h2>
+              {authMode === 'login' && '🔑 Đăng Nhập Amazon Cognito'}
+              {authMode === 'register' && '📝 Đăng Ký Tài Khoản'}
+              {authMode === 'confirm' && '✉️ Xác Nhận Email'}
+            </h2>
             
             {authError && <div className="auth-error">{authError}</div>}
+            {authMessage && <div className="auth-message">{authMessage}</div>}
 
             <form onSubmit={handleAuthSubmit}>
               {authMode === 'register' && (
@@ -848,6 +917,7 @@ function App() {
                   />
                 </div>
               )}
+
               <div className="form-group">
                 <label>Email</label>
                 <input 
@@ -858,27 +928,59 @@ function App() {
                   required 
                 />
               </div>
-              <div className="form-group">
-                <label>Mật khẩu (Tối thiểu 8 ký tự)</label>
-                <input 
-                  type="password" 
-                  placeholder="••••••••" 
-                  value={authPasswordInput} 
-                  onChange={e => setAuthPasswordInput(e.target.value)} 
-                  required 
-                />
-              </div>
 
-              <button type="submit" className="btn btn-primary">
-                {authMode === 'login' ? 'Đăng Nhập' : 'Tạo Tài Khoản'}
+              {authMode === 'confirm' ? (
+                <div className="form-group">
+                  <label>Mã xác nhận</label>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    placeholder="Nhập mã trong email"
+                    value={authConfirmationCode}
+                    onChange={e => setAuthConfirmationCode(e.target.value)}
+                    required
+                  />
+                </div>
+              ) : (
+                <div className="form-group">
+                  <label>Mật khẩu (Tối thiểu 8 ký tự)</label>
+                  <input 
+                    type="password" 
+                    placeholder="••••••••" 
+                    value={authPasswordInput} 
+                    onChange={e => setAuthPasswordInput(e.target.value)} 
+                    required 
+                  />
+                </div>
+              )}
+
+              <button type="submit" className="btn btn-primary" disabled={isAuthSubmitting}>
+                {isAuthSubmitting
+                  ? 'Đang xử lý...'
+                  : authMode === 'login'
+                    ? 'Đăng Nhập'
+                    : authMode === 'register'
+                      ? 'Tạo Tài Khoản'
+                      : 'Xác Nhận Tài Khoản'}
               </button>
             </form>
 
             <div className="modal-footer">
               {authMode === 'login' ? (
-                <span>Chưa có tài khoản? <span className="link-span" onClick={() => setAuthMode('register')}>Đăng ký ngay</span></span>
+                <span>Chưa có tài khoản? <span className="link-span" onClick={() => { setAuthMode('register'); setAuthError(''); setAuthMessage(''); }}>Đăng ký ngay</span></span>
+              ) : authMode === 'register' ? (
+                <span>Đã có tài khoản? <span className="link-span" onClick={() => { setAuthMode('login'); setAuthError(''); setAuthMessage(''); }}>Đăng nhập</span></span>
               ) : (
-                <span>Đã có tài khoản? <span className="link-span" onClick={() => setAuthMode('login')}>Đăng nhập</span></span>
+                <div className="confirmation-actions">
+                  <button type="button" className="link-button" disabled={isAuthSubmitting} onClick={handleResendConfirmationCode}>
+                    Gửi lại mã
+                  </button>
+                  <span>·</span>
+                  <button type="button" className="link-button" onClick={() => { setAuthMode('login'); setAuthError(''); setAuthMessage(''); }}>
+                    Quay lại đăng nhập
+                  </button>
+                </div>
               )}
             </div>
           </div>

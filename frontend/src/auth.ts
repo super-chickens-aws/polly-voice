@@ -13,6 +13,7 @@ const pool = awsEnabled && userPoolId && clientId
   : null;
 
 export type SessionUser = { id: string; email: string };
+export type SignUpResult = 'confirmed' | 'confirmation-required';
 
 export async function signIn(email: string, password: string): Promise<SessionUser> {
   if (!pool) {
@@ -36,12 +37,16 @@ export async function signIn(email: string, password: string): Promise<SessionUs
   });
 }
 
-export async function signUp(name: string, email: string, password: string): Promise<void> {
+export async function signUp(
+  name: string,
+  email: string,
+  password: string
+): Promise<SignUpResult> {
   if (!pool) {
     await signIn(email, password);
-    return;
+    return 'confirmed';
   }
-  await new Promise<void>((resolve, reject) => {
+  return new Promise((resolve, reject) => {
     pool.signUp(
       email,
       password,
@@ -52,14 +57,27 @@ export async function signUp(name: string, email: string, password: string): Pro
       [],
       (error, result) => {
         if (error) return reject(error);
-        if (result?.userConfirmed) return resolve();
-        const code = window.prompt('Nhập mã xác nhận Cognito đã gửi qua email:');
-        if (!code) return reject(new Error('Cần mã xác nhận để hoàn tất đăng ký.'));
-        result?.user.confirmRegistration(code, true, (confirmError) =>
-          confirmError ? reject(confirmError) : resolve()
-        );
+        resolve(result?.userConfirmed ? 'confirmed' : 'confirmation-required');
       }
     );
+  });
+}
+
+export async function confirmSignUp(email: string, code: string): Promise<void> {
+  if (!pool) return;
+  await new Promise<void>((resolve, reject) => {
+    const user = new CognitoUser({ Username: email, Pool: pool });
+    user.confirmRegistration(code.trim(), true, (error) =>
+      error ? reject(error) : resolve()
+    );
+  });
+}
+
+export async function resendConfirmationCode(email: string): Promise<void> {
+  if (!pool) return;
+  await new Promise<void>((resolve, reject) => {
+    const user = new CognitoUser({ Username: email, Pool: pool });
+    user.resendConfirmationCode((error) => error ? reject(error) : resolve());
   });
 }
 
