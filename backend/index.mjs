@@ -101,6 +101,31 @@ export const handler = async (event) => {
     }
 
     // =============================
+    // GET /history
+    // =============================
+    if (path === "/history") {
+
+        const userId =
+            event.requestContext.authorizer.jwt.claims.sub;
+
+        const history =
+            await getHistory(userId);
+
+        return {
+
+            statusCode: 200,
+
+            headers: {
+                "Content-Type": "application/json"
+            },
+
+            body: JSON.stringify(history)
+
+        };
+
+    }
+
+    // =============================
     // GET /auth/profile
     // =============================
 

@@ -6,6 +6,7 @@ import { getProfile } from "../services/profile";
 import { tts } from "../services/tts";
 
 import { preview } from "../services/preview";
+import { getHistory } from "../services/history";
 
 export default function Dashboard() {
 
@@ -19,9 +20,11 @@ export default function Dashboard() {
     const [speed, setSpeed] = useState(100);
     const [pitch, setPitch] = useState(0);
     const [volume, setVolume] = useState(100);
+    const [history, setHistory] = useState<any[]>([]);
 
     useEffect(() => {
         loadProfile();
+        loadHistory();
     }, []);
 
     async function loadProfile() {
@@ -35,35 +38,73 @@ export default function Dashboard() {
 
     }
 
-    async function handleGenerate() {
-        if (!text.trim()) {
-            alert("Please enter some text.");
-            return;
-        }
+    async function loadHistory() {
 
-        try {
-            const data = await tts({
-                text,
-                voiceId,
-                engine,
-                speed,
-                pitch,
-                volume
-            });
+    try {
 
-            const a = document.createElement("a");
-            a.href = data.downloadUrl;
-            a.target = "_self";
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-        }
+        const data = await getHistory();
 
-        catch (error) {
-            console.error(error);
-            alert("Generate failed");
-        }
+        setHistory(data);
+
     }
+
+    catch (error) {
+
+        console.error(error);
+
+    }
+
+}
+
+    async function handleGenerate() {
+
+    if (!text.trim()) {
+
+        alert("Please enter some text.");
+
+        return;
+
+    }
+
+    try {
+
+        const data = await tts({
+
+            text,
+            voiceId,
+            engine,
+            speed,
+            pitch,
+            volume
+
+        });
+
+        // Reload lịch sử
+        await loadHistory();
+
+        const a = document.createElement("a");
+
+        a.href = data.downloadUrl;
+
+        a.target = "_self";
+
+        document.body.appendChild(a);
+
+        a.click();
+
+        document.body.removeChild(a);
+
+    }
+
+    catch (error) {
+
+        console.error(error);
+
+        alert("Generate failed");
+
+    }
+
+}
 
     async function handlePreview() {
         if (!text.trim()) {
@@ -240,6 +281,66 @@ export default function Dashboard() {
                     />
                 )
             }
+
+            <hr />
+
+<h2>History</h2>
+
+{
+    history.length === 0 ? (
+
+        <p>No history.</p>
+
+    ) : (
+
+        history.map((item) => (
+
+            <div
+                key={`${item.userId}-${item.createdAt}`}
+                style={{
+                    border: "1px solid #ccc",
+                    borderRadius: 8,
+                    padding: 12,
+                    marginBottom: 12
+                }}
+            >
+
+                <p>
+                    <b>Text:</b> {item.text}
+                </p>
+
+                <p>
+                    <b>Voice:</b> {item.voiceId}
+                </p>
+
+                <p>
+                    <b>Engine:</b> {item.engine}
+                </p>
+
+                <p>
+                    <b>Speed:</b> {item.speed}%
+                </p>
+
+                <p>
+                    <b>Pitch:</b> {item.pitch}%
+                </p>
+
+                <p>
+                    <b>Volume:</b> {item.volume}%
+                </p>
+
+                <p>
+                    <b>Date:</b>{" "}
+                    {new Date(item.createdAt).toLocaleString()}
+                </p>
+
+            </div>
+
+        ))
+
+    )
+
+}
 
             <button
                 onClick={handleLogout}
