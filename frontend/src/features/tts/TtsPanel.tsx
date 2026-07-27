@@ -1,6 +1,7 @@
 import type { ChangeEvent, RefObject } from 'react'
 import { AudioPlayer } from '../../components/audio/AudioPlayer'
 import type { UserRole } from '../../types/app'
+import { AsyncTtsSection } from './AsyncTtsSection'
 import type { PreviewEngine, TtsPreviewState } from './ttsPreviewTypes'
 
 interface TtsPreviewForm {
@@ -115,14 +116,6 @@ export function TtsPanel({
           >
             {isGenerating ? '⏳ Đang tạo Preview...' : '▶ Nghe Thử Preview'}
           </button>
-          <button
-            type="button"
-            className="btn btn-secondary"
-            disabled
-            title="Tính năng async TTS chưa được kết nối"
-          >
-            Tạo Audio MP3 — Chưa kết nối
-          </button>
         </div>
 
         {hasError && (
@@ -157,6 +150,11 @@ export function TtsPanel({
             formatTime={formatTime}
           />
         )}
+        <AsyncTtsSection
+          text={form.text}
+          voice={form.voice}
+          engine={form.engine}
+        />
       </div>
 
       <div className="glass-panel settings-panel">

@@ -63,7 +63,7 @@ function App() {
   const userRole = status === 'authenticated' ? 'user' : 'guest'
   const userEmail =
     user?.email ?? user?.preferredUsername ?? user?.name ?? 'Authenticated User'
-  const charLimit = 500
+  const charLimit = 3_000
 
   const handleAudioFailure = useCallback(() => {
     setIsPlaying(false)
@@ -120,7 +120,7 @@ function App() {
     reader.onload = (loadEvent) => {
       const result = loadEvent.target?.result
       if (typeof result === 'string') {
-        setText(result.slice(0, charLimit))
+        setText(result)
         clearPreviewError()
       }
     }
