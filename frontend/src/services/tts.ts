@@ -1,11 +1,11 @@
 import { API_URL } from "../config";
 import { fetchAuthSession } from "aws-amplify/auth";
 
-export async function tts(text: string) {
+export async function tts(data: any) {
 
     const session = await fetchAuthSession();
 
-    const token = session.tokens?.idToken?.toString();
+    const token = session.tokens?.accessToken?.toString();
 
     const response = await fetch(`${API_URL}/tts`, {
 
@@ -19,11 +19,7 @@ export async function tts(text: string) {
 
         },
 
-        body: JSON.stringify({
-
-            text
-
-        })
+        body: JSON.stringify(data)
 
     });
 

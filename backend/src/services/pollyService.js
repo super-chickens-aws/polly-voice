@@ -1,23 +1,41 @@
 import {
+
     PollyClient,
+
     SynthesizeSpeechCommand
+
 } from "@aws-sdk/client-polly";
 
 const client = new PollyClient({
+
     region: "ap-southeast-1"
+
 });
 
-export async function generateSpeech(text) {
+export async function generateSpeech({
+
+    text,
+
+    voiceId,
+
+    engine
+
+}) {
 
     const command = new SynthesizeSpeechCommand({
-        Engine: "neural",
-        VoiceId: "Danielle",
+
+        Text: text,
+
         OutputFormat: "mp3",
-        Text: text
+
+        VoiceId: voiceId,
+
+        Engine: engine
+
     });
 
     const response = await client.send(command);
-    
+
     return response.AudioStream;
 
 }

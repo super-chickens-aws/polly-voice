@@ -1,7 +1,7 @@
 import { API_URL } from "../config";
 import { fetchAuthSession } from "aws-amplify/auth";
 
-export async function preview(text: string) {
+export async function preview(data: any) {
 
     const session = await fetchAuthSession();
 
@@ -19,11 +19,7 @@ export async function preview(text: string) {
 
         },
 
-        body: JSON.stringify({
-
-            text
-
-        })
+        body: JSON.stringify(data)
 
     });
 
