@@ -3,10 +3,12 @@ import { useNavigate } from "react-router-dom";
 
 import { logout } from "../services/auth";
 import { getProfile } from "../services/profile";
-import { tts } from "../services/tts";
 
+import { tts } from "../services/tts";
 import { preview } from "../services/preview";
+
 import { getHistory } from "../services/history";
+import { downloadHistory } from "../services/historyDownload";
 
 export default function Dashboard() {
 
@@ -51,6 +53,38 @@ export default function Dashboard() {
     catch (error) {
 
         console.error(error);
+
+    }
+
+}
+
+async function handleHistoryDownload(audioKey: string) {
+
+    try {
+
+        const data = await downloadHistory(audioKey);
+
+        console.log("Download response:", data);
+
+        const a = document.createElement("a");
+
+        a.href = data.downloadUrl;
+
+        a.target = "_self";
+
+        document.body.appendChild(a);
+
+        a.click();
+
+        document.body.removeChild(a);
+
+    }
+
+    catch (error) {
+
+        console.error(error);
+
+        alert("Download failed");
 
     }
 
@@ -333,6 +367,14 @@ export default function Dashboard() {
                     <b>Date:</b>{" "}
                     {new Date(item.createdAt).toLocaleString()}
                 </p>
+
+                <button
+    onClick={() => handleHistoryDownload(item.audioKey)}
+>
+
+    Download Again
+
+</button>
 
             </div>
 

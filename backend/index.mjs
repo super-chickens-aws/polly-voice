@@ -126,6 +126,35 @@ export const handler = async (event) => {
     }
 
     // =============================
+    // POST /history/download
+    // =============================
+    if (path === "/history/download") {
+
+        const body = JSON.parse(event.body);
+
+        const { audioKey } = body;
+
+        const downloadUrl = await getDownloadUrl(audioKey);
+
+        return {
+
+            statusCode: 200,
+
+            headers: {
+                "Content-Type": "application/json"
+            },
+
+            body: JSON.stringify({
+
+                downloadUrl
+
+            })
+
+        };
+
+    }
+
+    // =============================
     // GET /auth/profile
     // =============================
 
