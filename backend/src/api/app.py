@@ -18,7 +18,12 @@ from botocore.exceptions import ClientError
 LOGGER = logging.getLogger()
 LOGGER.setLevel(logging.INFO)
 
-FRONTEND_ORIGIN = os.environ.get("FRONTEND_ORIGIN", "http://localhost:5173")
+DEFAULT_FRONTEND_ORIGINS = (
+    "http://localhost:5173,"
+    "https://ductest.d3hm91wq3i4ey8.amplifyapp.com"
+)
+CORS_ALLOW_METHODS = "GET,POST,PUT,DELETE,OPTIONS"
+CORS_ALLOW_HEADERS = "Content-Type,Authorization"
 MAX_PREVIEW_TEXT_LENGTH = 500
 DEFAULT_ENGINE = "neural"
 DEFAULT_OUTPUT_FORMAT = "mp3"
@@ -147,7 +152,6 @@ def _response(status_code: int, body: dict[str, Any]) -> dict[str, Any]:
     return {
         "statusCode": status_code,
         "headers": {
-            "Access-Control-Allow-Origin": FRONTEND_ORIGIN,
             "Content-Type": "application/json",
             "Vary": "Origin",
         },
@@ -156,6 +160,58 @@ def _response(status_code: int, body: dict[str, Any]) -> dict[str, Any]:
             separators=(",", ":"),
             default=_json_default,
         ),
+    }
+
+
+def _request_origin(event: dict[str, Any]) -> str | None:
+    headers = event.get("headers")
+    if not isinstance(headers, dict):
+        return None
+    for name, value in headers.items():
+        if (
+            isinstance(name, str)
+            and name.lower() == "origin"
+            and isinstance(value, str)
+        ):
+            return value
+    return None
+
+
+def _allowed_frontend_origins() -> frozenset[str]:
+    configured = os.environ.get(
+        "FRONTEND_ORIGINS", DEFAULT_FRONTEND_ORIGINS
+    )
+    return frozenset(
+        origin.strip() for origin in configured.split(",") if origin.strip()
+    )
+
+
+def _with_cors(
+    response: dict[str, Any], event: dict[str, Any]
+) -> dict[str, Any]:
+    headers = response.setdefault("headers", {})
+    if not isinstance(headers, dict):
+        headers = {}
+        response["headers"] = headers
+    headers["Vary"] = "Origin"
+    origin = _request_origin(event)
+    if origin in _allowed_frontend_origins():
+        headers["Access-Control-Allow-Origin"] = origin
+    else:
+        headers.pop("Access-Control-Allow-Origin", None)
+    return response
+
+
+def _preflight_response() -> dict[str, Any]:
+    return {
+        "statusCode": 204,
+        "headers": {
+            "Access-Control-Allow-Headers": CORS_ALLOW_HEADERS,
+            "Access-Control-Allow-Methods": CORS_ALLOW_METHODS,
+            "Access-Control-Max-Age": "600",
+            "Vary": "Origin",
+        },
+        "body": "",
     }
 
 
@@ -1240,11 +1296,16 @@ def _handle_preview(event: dict[str, Any], request_id: str | None) -> dict[str, 
     )
 
 
-def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
+def _dispatch_request(
+    event: dict[str, Any], context: Any
+) -> dict[str, Any]:
     """Dispatch API Gateway requests for the MVP."""
     method = event.get("httpMethod", "UNKNOWN")
     path = event.get("resource") or event.get("path", "UNKNOWN")
     request_id = getattr(context, "aws_request_id", None)
+
+    if method == "OPTIONS":
+        return _preflight_response()
 
     if method == "POST" and path == "/tts/preview":
         return _handle_preview(event, request_id)
@@ -1331,3 +1392,8 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         f"{method} {path} is not implemented.",
         request_id,
     )
+
+
+def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
+    """Dispatch a request and attach allowlisted CORS response headers."""
+    return _with_cors(_dispatch_request(event, context), event)

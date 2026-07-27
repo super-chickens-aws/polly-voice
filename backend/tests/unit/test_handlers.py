@@ -223,8 +223,24 @@ def test_api_response_rejects_unsupported_json_values() -> None:
         handler._response(200, {"value": object()})
 
 
-def _preview_event(payload: object) -> dict[str, str]:
-    return {"httpMethod": "POST", "resource": "/tts/preview", "body": json.dumps(payload)}
+LOCAL_FRONTEND_ORIGIN = "http://localhost:5173"
+AMPLIFY_FRONTEND_ORIGIN = (
+    "https://ductest.d3hm91wq3i4ey8.amplifyapp.com"
+)
+CORS_ALLOWLIST = f"{LOCAL_FRONTEND_ORIGIN},{AMPLIFY_FRONTEND_ORIGIN}"
+
+
+def _preview_event(
+    payload: object, origin: str | None = None
+) -> dict[str, Any]:
+    event: dict[str, Any] = {
+        "httpMethod": "POST",
+        "resource": "/tts/preview",
+        "body": json.dumps(payload),
+    }
+    if origin is not None:
+        event["headers"] = {"Origin": origin}
+    return event
 
 
 def _profile_event(method: str, payload: object | None = None) -> dict[str, Any]:
@@ -323,13 +339,131 @@ def _preview_response(
     *,
     polly_error: ClientError | None = None,
     s3_error: ClientError | None = None,
+    origin: str | None = None,
 ) -> tuple[dict[str, Any], FakePolly, FakeS3, FakeAudioStream]:
     handler = _load_handler("api")
     stream = FakeAudioStream()
     polly = FakePolly(stream, polly_error)
     s3 = FakeS3(s3_error)
     _configure_preview_clients(monkeypatch, handler, polly, s3)
-    return handler.lambda_handler(_preview_event(payload), LambdaContext()), polly, s3, stream
+    return (
+        handler.lambda_handler(
+            _preview_event(payload, origin), LambdaContext()
+        ),
+        polly,
+        s3,
+        stream,
+    )
+
+
+@pytest.mark.parametrize(
+    "origin", [LOCAL_FRONTEND_ORIGIN, AMPLIFY_FRONTEND_ORIGIN]
+)
+def test_api_cors_allows_configured_frontend_origins(
+    monkeypatch: Any, origin: str
+) -> None:
+    monkeypatch.setenv("FRONTEND_ORIGINS", CORS_ALLOWLIST)
+    response, _, _, _ = _preview_response(
+        monkeypatch,
+        {
+            "text": "Allowed origin test",
+            "voice": "Joanna",
+            "engine": "neural",
+            "output_format": "mp3",
+        },
+        origin=origin,
+    )
+
+    assert response["statusCode"] == 200
+    assert response["headers"]["Access-Control-Allow-Origin"] == origin
+    assert response["headers"]["Vary"] == "Origin"
+    assert "Access-Control-Allow-Credentials" not in response["headers"]
+
+
+def test_api_cors_does_not_reflect_unknown_origin(
+    monkeypatch: Any,
+) -> None:
+    monkeypatch.setenv("FRONTEND_ORIGINS", CORS_ALLOWLIST)
+    handler = _load_handler("api")
+
+    response = handler.lambda_handler(
+        {
+            "httpMethod": "GET",
+            "resource": "/unknown",
+            "headers": {"origin": "https://unknown.example"},
+        },
+        LambdaContext(),
+    )
+
+    assert response["statusCode"] == 501
+    assert "Access-Control-Allow-Origin" not in response["headers"]
+    assert response["headers"]["Vary"] == "Origin"
+
+
+@pytest.mark.parametrize(
+    "status_code", [400, 401, 404, 409, 500, 502]
+)
+def test_api_error_responses_include_cors_for_allowed_origin(
+    monkeypatch: Any, status_code: int
+) -> None:
+    monkeypatch.setenv("FRONTEND_ORIGINS", CORS_ALLOWLIST)
+    handler = _load_handler("api")
+    event = {"headers": {"Origin": AMPLIFY_FRONTEND_ORIGIN}}
+
+    response = handler._with_cors(
+        handler._error_response(
+            status_code,
+            "TEST_ERROR",
+            "Safe test error.",
+            "unit-test-request",
+        ),
+        event,
+    )
+
+    assert response["statusCode"] == status_code
+    assert (
+        response["headers"]["Access-Control-Allow-Origin"]
+        == AMPLIFY_FRONTEND_ORIGIN
+    )
+
+
+def test_api_options_preflight_returns_allowlisted_cors_headers(
+    monkeypatch: Any,
+) -> None:
+    monkeypatch.setenv("FRONTEND_ORIGINS", CORS_ALLOWLIST)
+    handler = _load_handler("api")
+
+    response = handler.lambda_handler(
+        {
+            "httpMethod": "OPTIONS",
+            "resource": "/tts/jobs/{job_id}/download",
+            "headers": {
+                "origin": AMPLIFY_FRONTEND_ORIGIN,
+                "access-control-request-method": "GET",
+                "access-control-request-headers": (
+                    "authorization,content-type"
+                ),
+            },
+        },
+        LambdaContext(),
+    )
+
+    assert response["statusCode"] == 204
+    assert response["body"] == ""
+    assert (
+        response["headers"]["Access-Control-Allow-Origin"]
+        == AMPLIFY_FRONTEND_ORIGIN
+    )
+    assert (
+        response["headers"]["Access-Control-Allow-Headers"]
+        == "Content-Type,Authorization"
+    )
+    assert (
+        response["headers"]["Access-Control-Allow-Methods"]
+        == "GET,POST,PUT,DELETE,OPTIONS"
+    )
+    assert response["headers"]["Access-Control-Max-Age"] == "600"
+    assert "Access-Control-Allow-Credentials" not in response["headers"]
 
 
 def test_tts_preview_returns_presigned_mp3_url(monkeypatch: Any) -> None:

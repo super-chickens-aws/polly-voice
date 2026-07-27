@@ -8,7 +8,7 @@ region = "us-east-1"
 profile = "polly-dev"
 confirm_changeset = true
 capabilities = "CAPABILITY_IAM"
-parameter_overrides = "Environment=\"dev\" FrontendOrigin=\"http://localhost:5173\" CognitoCallbackUrl=\"http://localhost:5173/auth/callback\" CognitoLogoutUrl=\"http://localhost:5173/\" CognitoDomainPrefix=\"polly-voice-dev-tri26\" PresignedUrlTtlSeconds=\"900\" JobTtlDays=\"30\""
+parameter_overrides = "Environment=\"dev\" FrontendOrigin=\"http://localhost:5173\" AmplifyFrontendOrigin=\"https://ductest.d3hm91wq3i4ey8.amplifyapp.com\" CognitoCallbackUrl=\"http://localhost:5173/auth/callback\" CognitoLogoutUrl=\"http://localhost:5173/\" CognitoDomainPrefix=\"polly-voice-dev-tri26\" PresignedUrlTtlSeconds=\"900\" JobTtlDays=\"30\""
 image_repositories = []
 
 [dev.global.parameters]
