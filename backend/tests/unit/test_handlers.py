@@ -118,6 +118,62 @@ class FakeUsersTable:
         }
 
 
+class FakeJobsTable:
+    def __init__(
+        self,
+        *,
+        item: dict[str, object] | None = None,
+        items: list[dict[str, object]] | None = None,
+        put_error: ClientError | None = None,
+        query_error: ClientError | None = None,
+        get_error: ClientError | None = None,
+        update_error: ClientError | None = None,
+    ) -> None:
+        self.item = item
+        self.items = items or []
+        self.put_error = put_error
+        self.query_error = query_error
+        self.get_error = get_error
+        self.update_error = update_error
+        self.put_calls: list[dict[str, object]] = []
+        self.query_calls: list[dict[str, object]] = []
+        self.get_calls: list[dict[str, object]] = []
+        self.update_calls: list[dict[str, object]] = []
+
+    def put_item(self, **kwargs: object) -> None:
+        self.put_calls.append(kwargs)
+        if self.put_error is not None:
+            raise self.put_error
+
+    def query(self, **kwargs: object) -> dict[str, object]:
+        self.query_calls.append(kwargs)
+        if self.query_error is not None:
+            raise self.query_error
+        return {"Items": self.items}
+
+    def get_item(self, **kwargs: object) -> dict[str, object]:
+        self.get_calls.append(kwargs)
+        if self.get_error is not None:
+            raise self.get_error
+        return {} if self.item is None else {"Item": self.item}
+
+    def update_item(self, **kwargs: object) -> None:
+        self.update_calls.append(kwargs)
+        if self.update_error is not None:
+            raise self.update_error
+
+
+class FakeSQS:
+    def __init__(self, error: ClientError | None = None) -> None:
+        self.error = error
+        self.calls: list[dict[str, object]] = []
+
+    def send_message(self, **kwargs: object) -> None:
+        self.calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
+
+
 def _load_handler(name: str) -> ModuleType:
     module_path = BACKEND_ROOT / "src" / name / "app.py"
     spec = importlib.util.spec_from_file_location(f"{name}_app", module_path)
@@ -151,6 +207,67 @@ def _profile_event(method: str, payload: object | None = None) -> dict[str, Any]
     if payload is not None:
         event["body"] = json.dumps(payload)
     return event
+
+
+def _job_event(
+    method: str,
+    resource: str = "/tts/jobs",
+    payload: object | None = None,
+    *,
+    job_id: str | None = None,
+) -> dict[str, Any]:
+    event: dict[str, Any] = {
+        "httpMethod": method,
+        "resource": resource,
+        "requestContext": {
+            "authorizer": {
+                "claims": {
+                    "sub": "authenticated-user",
+                }
+            }
+        },
+    }
+    if payload is not None:
+        event["body"] = json.dumps(payload)
+    if resource == "/tts/jobs/{job_id}":
+        event["pathParameters"] = {} if job_id is None else {"job_id": job_id}
+    return event
+
+
+def _valid_job_payload() -> dict[str, str]:
+    return {
+        "text": "Text to synthesize",
+        "voice": "Joanna",
+        "engine": "neural",
+        "output_format": "mp3",
+    }
+
+
+def _configure_job_services(
+    monkeypatch: Any, handler: ModuleType, table: FakeJobsTable, sqs: FakeSQS
+) -> None:
+    monkeypatch.setattr(handler, "_create_conversion_jobs_table", lambda: table)
+    monkeypatch.setattr(handler, "_create_sqs_client", lambda: sqs)
+    monkeypatch.setenv("CONVERSION_JOBS_TABLE_NAME", "unit-test-jobs")
+    monkeypatch.setenv("TTS_QUEUE_URL", "https://sqs.example.test/tts")
+    monkeypatch.setenv("JOB_TTL_DAYS", "30")
+
+
+def _create_job_response(
+    monkeypatch: Any,
+    payload: object,
+    *,
+    table: FakeJobsTable | None = None,
+    sqs: FakeSQS | None = None,
+) -> tuple[dict[str, Any], FakeJobsTable, FakeSQS]:
+    handler = _load_handler("api")
+    fake_table = table or FakeJobsTable()
+    fake_sqs = sqs or FakeSQS()
+    _configure_job_services(monkeypatch, handler, fake_table, fake_sqs)
+    response = handler.lambda_handler(
+        _job_event("POST", payload=payload), LambdaContext()
+    )
+    return response, fake_table, fake_sqs
 
 
 def _configure_preview_clients(
@@ -588,6 +705,406 @@ def test_profile_database_client_error_returns_502(monkeypatch: Any) -> None:
     assert json.loads(response["body"])["error"]["code"] == "DATABASE_ERROR"
 
 
+def test_post_tts_job_success(monkeypatch: Any) -> None:
+    response, _, _ = _create_job_response(monkeypatch, _valid_job_payload())
+
+    job = json.loads(response["body"])["job"]
+    assert response["statusCode"] == 202
+    assert job["type"] == "TTS"
+    assert job["status"] == "QUEUED"
+    assert job["voice"] == "Joanna"
+    assert job["engine"] == "neural"
+    assert job["output_format"] == "mp3"
+    assert isinstance(job["created_at"], int)
+    assert job["updated_at"] == job["created_at"]
+
+
+def test_post_tts_job_stores_correct_dynamodb_item(monkeypatch: Any) -> None:
+    _, table, _ = _create_job_response(
+        monkeypatch,
+        {
+            "text": "  Text to synthesize  ",
+            "voice": "Joanna",
+            "engine": "standard",
+            "output_format": "ogg_vorbis",
+        },
+    )
+
+    item = table.put_calls[0]["Item"]
+    assert item["owner_sub"] == "authenticated-user"
+    assert item["type"] == "TTS"
+    assert item["status"] == "QUEUED"
+    assert item["text"] == "Text to synthesize"
+    assert item["voice"] == "Joanna"
+    assert item["engine"] == "standard"
+    assert item["output_format"] == "ogg_vorbis"
+    assert item["updated_at"] == item["created_at"]
+    assert item["expires_at"] == item["created_at"] + 30 * 86400
+
+
+def test_post_tts_job_sends_only_job_id_and_type_to_sqs(monkeypatch: Any) -> None:
+    _, table, sqs = _create_job_response(monkeypatch, _valid_job_payload())
+
+    message = json.loads(sqs.calls[0]["MessageBody"])
+    assert message == {
+        "job_id": table.put_calls[0]["Item"]["job_id"],
+        "type": "TTS",
+    }
+    assert sqs.calls[0]["QueueUrl"] == "https://sqs.example.test/tts"
+
+
+def test_post_tts_job_uses_owner_sub_from_claims(monkeypatch: Any) -> None:
+    handler = _load_handler("api")
+    table = FakeJobsTable()
+    sqs = FakeSQS()
+    _configure_job_services(monkeypatch, handler, table, sqs)
+    event = _job_event("POST", payload=_valid_job_payload())
+    event["requestContext"]["authorizer"]["claims"]["sub"] = "claim-owner"
+
+    handler.lambda_handler(event, LambdaContext())
+
+    assert table.put_calls[0]["Item"]["owner_sub"] == "claim-owner"
+
+
+def test_post_tts_job_does_not_return_text(monkeypatch: Any) -> None:
+    response, _, _ = _create_job_response(monkeypatch, _valid_job_payload())
+
+    assert "text" not in json.loads(response["body"])["job"]
+
+
+def test_post_tts_job_missing_authentication_returns_401() -> None:
+    handler = _load_handler("api")
+    event = {
+        "httpMethod": "POST",
+        "resource": "/tts/jobs",
+        "body": json.dumps(_valid_job_payload()),
+    }
+
+    response = handler.lambda_handler(event, LambdaContext())
+
+    assert response["statusCode"] == 401
+    assert json.loads(response["body"])["error"]["code"] == "UNAUTHORIZED"
+
+
+def test_post_tts_job_rejects_invalid_json() -> None:
+    handler = _load_handler("api")
+    event = _job_event("POST")
+    event["body"] = "{"
+
+    response = handler.lambda_handler(event, LambdaContext())
+
+    assert response["statusCode"] == 400
+    assert json.loads(response["body"])["error"]["code"] == "INVALID_JSON"
+
+
+def test_post_tts_job_rejects_missing_text() -> None:
+    handler = _load_handler("api")
+    response = handler.lambda_handler(
+        _job_event("POST", payload={"voice": "Joanna"}), LambdaContext()
+    )
+
+    assert response["statusCode"] == 400
+    assert json.loads(response["body"])["error"]["code"] == "MISSING_TEXT"
+
+
+def test_post_tts_job_rejects_blank_text() -> None:
+    handler = _load_handler("api")
+    response = handler.lambda_handler(
+        _job_event("POST", payload={"text": "   ", "voice": "Joanna"}),
+        LambdaContext(),
+    )
+
+    assert response["statusCode"] == 400
+    assert json.loads(response["body"])["error"]["code"] == "INVALID_TEXT"
+
+
+def test_post_tts_job_rejects_text_longer_than_3000_characters() -> None:
+    handler = _load_handler("api")
+    response = handler.lambda_handler(
+        _job_event("POST", payload={"text": "a" * 3001, "voice": "Joanna"}),
+        LambdaContext(),
+    )
+
+    assert response["statusCode"] == 400
+    assert json.loads(response["body"])["error"]["code"] == "TEXT_TOO_LONG"
+
+
+def test_post_tts_job_rejects_missing_voice() -> None:
+    handler = _load_handler("api")
+    response = handler.lambda_handler(
+        _job_event("POST", payload={"text": "Hello"}), LambdaContext()
+    )
+
+    assert response["statusCode"] == 400
+    assert json.loads(response["body"])["error"]["code"] == "MISSING_VOICE"
+
+
+def test_post_tts_job_rejects_invalid_engine() -> None:
+    handler = _load_handler("api")
+    payload = _valid_job_payload()
+    payload["engine"] = "generative"
+
+    response = handler.lambda_handler(
+        _job_event("POST", payload=payload), LambdaContext()
+    )
+
+    assert response["statusCode"] == 400
+    assert json.loads(response["body"])["error"]["code"] == "INVALID_ENGINE"
+
+
+def test_post_tts_job_rejects_invalid_output_format() -> None:
+    handler = _load_handler("api")
+    payload = _valid_job_payload()
+    payload["output_format"] = "wav"
+
+    response = handler.lambda_handler(
+        _job_event("POST", payload=payload), LambdaContext()
+    )
+
+    assert response["statusCode"] == 400
+    assert json.loads(response["body"])["error"]["code"] == "INVALID_OUTPUT_FORMAT"
+
+
+def test_post_tts_job_rejects_unknown_fields() -> None:
+    handler = _load_handler("api")
+    payload = _valid_job_payload()
+    payload["priority"] = "high"
+
+    response = handler.lambda_handler(
+        _job_event("POST", payload=payload), LambdaContext()
+    )
+
+    assert response["statusCode"] == 400
+    assert json.loads(response["body"])["error"]["code"] == "UNKNOWN_FIELDS"
+
+
+def test_post_tts_job_rejects_owner_sub_from_body() -> None:
+    handler = _load_handler("api")
+    payload = _valid_job_payload()
+    payload["owner_sub"] = "attacker-controlled-owner"
+
+    response = handler.lambda_handler(
+        _job_event("POST", payload=payload), LambdaContext()
+    )
+
+    assert response["statusCode"] == 400
+    assert json.loads(response["body"])["error"]["code"] == "UNKNOWN_FIELDS"
+
+
+def test_post_tts_job_database_put_failure_returns_502(monkeypatch: Any) -> None:
+    table = FakeJobsTable(put_error=_client_error("InternalServerError"))
+    response, _, sqs = _create_job_response(
+        monkeypatch, _valid_job_payload(), table=table
+    )
+
+    assert response["statusCode"] == 502
+    assert json.loads(response["body"])["error"]["code"] == "DATABASE_ERROR"
+    assert sqs.calls == []
+
+
+def test_post_tts_job_sqs_failure_marks_job_failed(monkeypatch: Any) -> None:
+    table = FakeJobsTable()
+    sqs = FakeSQS(_client_error("ServiceUnavailable"))
+    response, _, _ = _create_job_response(
+        monkeypatch, _valid_job_payload(), table=table, sqs=sqs
+    )
+
+    assert response["statusCode"] == 502
+    assert json.loads(response["body"])["error"]["code"] == "QUEUE_ERROR"
+    assert len(table.update_calls) == 1
+    compensation = table.update_calls[0]
+    assert compensation["Key"]["job_id"] == table.put_calls[0]["Item"]["job_id"]
+    assert compensation["ExpressionAttributeValues"][":failed"] == "FAILED"
+
+
+def test_get_tts_jobs_list_success(monkeypatch: Any) -> None:
+    handler = _load_handler("api")
+    table = FakeJobsTable(
+        items=[
+            {
+                "job_id": "job-1",
+                "owner_sub": "authenticated-user",
+                "type": "TTS",
+                "status": "QUEUED",
+                "voice": "Joanna",
+                "engine": "neural",
+                "output_format": "mp3",
+                "created_at": 20,
+                "updated_at": 20,
+            },
+            {
+                "job_id": "other-job",
+                "owner_sub": "another-user",
+                "type": "TTS",
+                "status": "QUEUED",
+            },
+        ]
+    )
+    monkeypatch.setattr(handler, "_create_conversion_jobs_table", lambda: table)
+
+    response = handler.lambda_handler(_job_event("GET"), LambdaContext())
+
+    assert response["statusCode"] == 200
+    jobs = json.loads(response["body"])["jobs"]
+    assert len(jobs) == 1
+    assert jobs[0]["job_id"] == "job-1"
+
+
+def test_get_tts_jobs_queries_owner_created_at_index(monkeypatch: Any) -> None:
+    handler = _load_handler("api")
+    table = FakeJobsTable()
+    monkeypatch.setattr(handler, "_create_conversion_jobs_table", lambda: table)
+
+    handler.lambda_handler(_job_event("GET"), LambdaContext())
+
+    call = table.query_calls[0]
+    assert call["IndexName"] == "ownerSub-createdAt-index"
+    assert call["KeyConditionExpression"] == "#owner_sub = :owner_sub"
+    assert call["ExpressionAttributeNames"] == {"#owner_sub": "owner_sub"}
+    assert call["ExpressionAttributeValues"] == {
+        ":owner_sub": "authenticated-user"
+    }
+
+
+def test_get_tts_jobs_uses_descending_order_and_limit_20(monkeypatch: Any) -> None:
+    handler = _load_handler("api")
+    table = FakeJobsTable()
+    monkeypatch.setattr(handler, "_create_conversion_jobs_table", lambda: table)
+
+    handler.lambda_handler(_job_event("GET"), LambdaContext())
+
+    assert table.query_calls[0]["ScanIndexForward"] is False
+    assert table.query_calls[0]["Limit"] == 20
+
+
+def test_get_tts_jobs_list_does_not_return_text(monkeypatch: Any) -> None:
+    handler = _load_handler("api")
+    table = FakeJobsTable(
+        items=[
+            {
+                "job_id": "job-1",
+                "owner_sub": "authenticated-user",
+                "type": "TTS",
+                "status": "QUEUED",
+                "text": "secret full text",
+            }
+        ]
+    )
+    monkeypatch.setattr(handler, "_create_conversion_jobs_table", lambda: table)
+
+    response = handler.lambda_handler(_job_event("GET"), LambdaContext())
+
+    assert "text" not in json.loads(response["body"])["jobs"][0]
+
+
+def test_get_tts_jobs_missing_authentication_returns_401() -> None:
+    handler = _load_handler("api")
+    response = handler.lambda_handler(
+        {"httpMethod": "GET", "resource": "/tts/jobs"}, LambdaContext()
+    )
+
+    assert response["statusCode"] == 401
+    assert json.loads(response["body"])["error"]["code"] == "UNAUTHORIZED"
+
+
+def test_get_tts_job_detail_success(monkeypatch: Any) -> None:
+    handler = _load_handler("api")
+    item = {
+        "job_id": "job-1",
+        "owner_sub": "authenticated-user",
+        "type": "TTS",
+        "status": "COMPLETED",
+        "voice": "Joanna",
+        "engine": "neural",
+        "output_format": "mp3",
+        "created_at": 10,
+        "updated_at": 20,
+        "completed_at": 20,
+        "output_key": "outputs/job-1.mp3",
+    }
+    table = FakeJobsTable(item=item)
+    monkeypatch.setattr(handler, "_create_conversion_jobs_table", lambda: table)
+
+    response = handler.lambda_handler(
+        _job_event("GET", "/tts/jobs/{job_id}", job_id="job-1"),
+        LambdaContext(),
+    )
+
+    assert response["statusCode"] == 200
+    assert json.loads(response["body"]) == {
+        "job": {key: value for key, value in item.items() if key != "owner_sub"}
+    }
+    assert table.get_calls == [{"Key": {"job_id": "job-1"}}]
+
+
+def test_get_tts_job_detail_missing_job_id_returns_400() -> None:
+    handler = _load_handler("api")
+    response = handler.lambda_handler(
+        _job_event("GET", "/tts/jobs/{job_id}"), LambdaContext()
+    )
+
+    assert response["statusCode"] == 400
+    assert json.loads(response["body"])["error"]["code"] == "INVALID_JOB_ID"
+
+
+def test_get_tts_job_detail_missing_job_returns_404(monkeypatch: Any) -> None:
+    handler = _load_handler("api")
+    table = FakeJobsTable()
+    monkeypatch.setattr(handler, "_create_conversion_jobs_table", lambda: table)
+
+    response = handler.lambda_handler(
+        _job_event("GET", "/tts/jobs/{job_id}", job_id="missing-job"),
+        LambdaContext(),
+    )
+
+    assert response["statusCode"] == 404
+    assert json.loads(response["body"])["error"]["code"] == "JOB_NOT_FOUND"
+
+
+def test_get_tts_job_detail_for_another_owner_returns_404(
+    monkeypatch: Any,
+) -> None:
+    handler = _load_handler("api")
+    table = FakeJobsTable(
+        item={
+            "job_id": "private-job",
+            "owner_sub": "another-user",
+            "type": "TTS",
+            "status": "QUEUED",
+        }
+    )
+    monkeypatch.setattr(handler, "_create_conversion_jobs_table", lambda: table)
+
+    response = handler.lambda_handler(
+        _job_event("GET", "/tts/jobs/{job_id}", job_id="private-job"),
+        LambdaContext(),
+    )
+
+    assert response["statusCode"] == 404
+    assert json.loads(response["body"])["error"]["code"] == "JOB_NOT_FOUND"
+
+
+def test_get_tts_job_detail_does_not_return_text(monkeypatch: Any) -> None:
+    handler = _load_handler("api")
+    table = FakeJobsTable(
+        item={
+            "job_id": "job-1",
+            "owner_sub": "authenticated-user",
+            "type": "TTS",
+            "status": "QUEUED",
+            "text": "secret full text",
+        }
+    )
+    monkeypatch.setattr(handler, "_create_conversion_jobs_table", lambda: table)
+
+    response = handler.lambda_handler(
+        _job_event("GET", "/tts/jobs/{job_id}", job_id="job-1"),
+        LambdaContext(),
+    )
+
+    assert "text" not in json.loads(response["body"])["job"]
+
+
 def test_other_api_routes_still_return_501() -> None:
     handler = _load_handler("api")
     response = handler.lambda_handler(
@@ -596,6 +1113,29 @@ def test_other_api_routes_still_return_501() -> None:
 
     assert response["statusCode"] == 501
     assert json.loads(response["body"])["error"]["code"] == "NOT_IMPLEMENTED"
+
+
+def test_download_and_delete_tts_job_routes_still_return_501() -> None:
+    handler = _load_handler("api")
+    download = handler.lambda_handler(
+        {
+            "httpMethod": "GET",
+            "resource": "/tts/jobs/{job_id}/download",
+            "pathParameters": {"job_id": "job-1"},
+        },
+        LambdaContext(),
+    )
+    delete = handler.lambda_handler(
+        {
+            "httpMethod": "DELETE",
+            "resource": "/tts/jobs/{job_id}",
+            "pathParameters": {"job_id": "job-1"},
+        },
+        LambdaContext(),
+    )
+
+    assert download["statusCode"] == 501
+    assert delete["statusCode"] == 501
 
 
 def test_tts_worker_acknowledges_sqs_batch() -> None:

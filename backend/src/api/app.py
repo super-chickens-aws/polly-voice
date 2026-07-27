@@ -44,6 +44,22 @@ PROFILE_FIELDS = (
 )
 PROFILE_REQUEST_FIELDS = {"display_name", "preferred_language"}
 ALLOWED_PREFERRED_LANGUAGES = {"vi-VN", "en-US"}
+MAX_JOB_TEXT_LENGTH = 3000
+JOB_REQUEST_FIELDS = {"text", "voice", "engine", "output_format"}
+JOB_RESPONSE_FIELDS = (
+    "job_id",
+    "type",
+    "status",
+    "voice",
+    "engine",
+    "output_format",
+    "created_at",
+    "updated_at",
+    "completed_at",
+    "error_code",
+    "error_message",
+    "output_key",
+)
 
 
 class PreviewValidationError(ValueError):
@@ -57,6 +73,15 @@ class PreviewValidationError(ValueError):
 
 class ProfileValidationError(ValueError):
     """An invalid client request for a user profile."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+class JobValidationError(ValueError):
+    """An invalid client request for an asynchronous TTS job."""
 
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
@@ -104,6 +129,18 @@ def _create_s3_client() -> Any:
 def _create_users_table() -> Any:
     """Create the DynamoDB Table lazily so unit tests can replace this factory."""
     return boto3.resource("dynamodb").Table(os.environ["USERS_TABLE_NAME"])
+
+
+def _create_conversion_jobs_table() -> Any:
+    """Create the conversion jobs Table only when a request needs it."""
+    return boto3.resource("dynamodb").Table(
+        os.environ["CONVERSION_JOBS_TABLE_NAME"]
+    )
+
+
+def _create_sqs_client() -> Any:
+    """Create SQS lazily so unit tests can replace this factory."""
+    return boto3.client("sqs")
 
 
 def _parse_preview_request(event: dict[str, Any]) -> dict[str, str]:
@@ -237,8 +274,79 @@ def _parse_profile_request(event: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def _parse_job_request(event: dict[str, Any]) -> dict[str, str]:
+    body = event.get("body")
+    if not isinstance(body, str):
+        raise JobValidationError("INVALID_JSON", "Request body must be valid JSON.")
+
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError as error:
+        raise JobValidationError(
+            "INVALID_JSON", "Request body must be valid JSON."
+        ) from error
+
+    if not isinstance(payload, dict):
+        raise JobValidationError(
+            "INVALID_JSON", "Request body must be a JSON object."
+        )
+
+    if set(payload) - JOB_REQUEST_FIELDS:
+        raise JobValidationError(
+            "UNKNOWN_FIELDS", "Request body contains unsupported fields."
+        )
+
+    if "text" not in payload:
+        raise JobValidationError("MISSING_TEXT", "text is required.")
+    text = payload["text"]
+    if not isinstance(text, str):
+        raise JobValidationError("INVALID_TEXT", "text must be a string.")
+    text = text.strip()
+    if not text:
+        raise JobValidationError("INVALID_TEXT", "text must be a non-empty string.")
+    if len(text) > MAX_JOB_TEXT_LENGTH:
+        raise JobValidationError(
+            "TEXT_TOO_LONG", "text must not exceed 3000 characters."
+        )
+
+    if "voice" not in payload:
+        raise JobValidationError("MISSING_VOICE", "voice is required.")
+    voice = payload["voice"]
+    if not isinstance(voice, str) or not voice.strip():
+        raise JobValidationError(
+            "INVALID_VOICE", "voice must be a non-empty string."
+        )
+
+    engine = payload.get("engine", DEFAULT_ENGINE)
+    if not isinstance(engine, str) or engine not in ALLOWED_ENGINES:
+        raise JobValidationError(
+            "INVALID_ENGINE", "engine must be either standard or neural."
+        )
+
+    output_format = payload.get("output_format", DEFAULT_OUTPUT_FORMAT)
+    if (
+        not isinstance(output_format, str)
+        or output_format not in ALLOWED_OUTPUT_FORMATS
+    ):
+        raise JobValidationError(
+            "INVALID_OUTPUT_FORMAT",
+            "output_format must be one of mp3, ogg_vorbis, or pcm.",
+        )
+
+    return {
+        "text": text,
+        "voice": voice,
+        "engine": engine,
+        "output_format": output_format,
+    }
+
+
 def _profile_body(item: dict[str, Any]) -> dict[str, Any]:
     return {"profile": {field: item.get(field) for field in PROFILE_FIELDS}}
+
+
+def _public_job(item: dict[str, Any]) -> dict[str, Any]:
+    return {field: item[field] for field in JOB_RESPONSE_FIELDS if field in item}
 
 
 def _handle_get_profile(cognito_sub: str, request_id: str | None) -> dict[str, Any]:
@@ -326,6 +434,172 @@ def _handle_put_profile(
             500, "INTERNAL_ERROR", "An internal error occurred.", request_id
         )
     return _response(200, _profile_body(attributes))
+
+
+def _mark_job_failed(
+    table: Any, job_id: str, updated_at: int, request_id: str | None
+) -> None:
+    try:
+        table.update_item(
+            Key={"job_id": job_id},
+            UpdateExpression="SET #status = :failed, updated_at = :updated_at",
+            ExpressionAttributeNames={"#status": "status"},
+            ExpressionAttributeValues={
+                ":failed": "FAILED",
+                ":updated_at": updated_at,
+            },
+        )
+    except Exception:
+        LOGGER.exception(
+            "tts_job_queue_compensation_error",
+            extra={"request_id": request_id, "job_id": job_id},
+        )
+
+
+def _handle_create_tts_job(
+    event: dict[str, Any], owner_sub: str, request_id: str | None
+) -> dict[str, Any]:
+    try:
+        request = _parse_job_request(event)
+    except JobValidationError as error:
+        return _error_response(400, error.code, error.message, request_id)
+
+    now = int(datetime.now(UTC).timestamp())
+    try:
+        ttl_days = int(os.environ.get("JOB_TTL_DAYS", "30"))
+        item: dict[str, Any] = {
+            "job_id": str(uuid.uuid4()),
+            "owner_sub": owner_sub,
+            "type": "TTS",
+            "status": "QUEUED",
+            "text": request["text"],
+            "voice": request["voice"],
+            "engine": request["engine"],
+            "output_format": request["output_format"],
+            "created_at": now,
+            "updated_at": now,
+            "expires_at": now + ttl_days * 86400,
+        }
+        table = _create_conversion_jobs_table()
+        table.put_item(Item=item)
+    except ClientError as error:
+        LOGGER.exception(
+            "tts_job_database_error",
+            extra={"request_id": request_id, "error_code": _client_error_code(error)},
+        )
+        return _error_response(
+            502, "DATABASE_ERROR", "Unable to create the TTS job.", request_id
+        )
+    except Exception:
+        LOGGER.exception("tts_job_unexpected_error", extra={"request_id": request_id})
+        return _error_response(
+            500, "INTERNAL_ERROR", "An internal error occurred.", request_id
+        )
+
+    try:
+        _create_sqs_client().send_message(
+            QueueUrl=os.environ["TTS_QUEUE_URL"],
+            MessageBody=json.dumps(
+                {"job_id": item["job_id"], "type": "TTS"},
+                separators=(",", ":"),
+            ),
+        )
+    except ClientError as error:
+        LOGGER.exception(
+            "tts_job_queue_error",
+            extra={"request_id": request_id, "error_code": _client_error_code(error)},
+        )
+        _mark_job_failed(table, item["job_id"], int(datetime.now(UTC).timestamp()), request_id)
+        return _error_response(
+            502, "QUEUE_ERROR", "Unable to queue the TTS job.", request_id
+        )
+    except Exception:
+        LOGGER.exception("tts_job_unexpected_error", extra={"request_id": request_id})
+        _mark_job_failed(table, item["job_id"], int(datetime.now(UTC).timestamp()), request_id)
+        return _error_response(
+            500, "INTERNAL_ERROR", "An internal error occurred.", request_id
+        )
+
+    return _response(202, {"job": _public_job(item)})
+
+
+def _handle_list_tts_jobs(
+    owner_sub: str, request_id: str | None
+) -> dict[str, Any]:
+    try:
+        result = _create_conversion_jobs_table().query(
+            IndexName="ownerSub-createdAt-index",
+            KeyConditionExpression="#owner_sub = :owner_sub",
+            ExpressionAttributeNames={"#owner_sub": "owner_sub"},
+            ExpressionAttributeValues={":owner_sub": owner_sub},
+            ScanIndexForward=False,
+            Limit=20,
+        )
+    except ClientError as error:
+        LOGGER.exception(
+            "tts_job_database_error",
+            extra={"request_id": request_id, "error_code": _client_error_code(error)},
+        )
+        return _error_response(
+            502, "DATABASE_ERROR", "Unable to list TTS jobs.", request_id
+        )
+    except Exception:
+        LOGGER.exception("tts_job_unexpected_error", extra={"request_id": request_id})
+        return _error_response(
+            500, "INTERNAL_ERROR", "An internal error occurred.", request_id
+        )
+
+    items = result.get("Items", [])
+    if not isinstance(items, list):
+        LOGGER.error(
+            "tts_job_query_invalid_items", extra={"request_id": request_id}
+        )
+        return _error_response(
+            500, "INTERNAL_ERROR", "An internal error occurred.", request_id
+        )
+    jobs = [
+        _public_job(item)
+        for item in items
+        if isinstance(item, dict) and item.get("owner_sub") == owner_sub
+    ]
+    return _response(200, {"jobs": jobs})
+
+
+def _handle_get_tts_job(
+    event: dict[str, Any], owner_sub: str, request_id: str | None
+) -> dict[str, Any]:
+    path_parameters = event.get("pathParameters")
+    job_id = (
+        path_parameters.get("job_id") if isinstance(path_parameters, dict) else None
+    )
+    if not isinstance(job_id, str) or not job_id.strip():
+        return _error_response(
+            400, "INVALID_JOB_ID", "A non-empty job_id is required.", request_id
+        )
+    job_id = job_id.strip()
+
+    try:
+        result = _create_conversion_jobs_table().get_item(Key={"job_id": job_id})
+    except ClientError as error:
+        LOGGER.exception(
+            "tts_job_database_error",
+            extra={"request_id": request_id, "error_code": _client_error_code(error)},
+        )
+        return _error_response(
+            502, "DATABASE_ERROR", "Unable to access the TTS job.", request_id
+        )
+    except Exception:
+        LOGGER.exception("tts_job_unexpected_error", extra={"request_id": request_id})
+        return _error_response(
+            500, "INTERNAL_ERROR", "An internal error occurred.", request_id
+        )
+
+    item = result.get("Item")
+    if not isinstance(item, dict) or item.get("owner_sub") != owner_sub:
+        return _error_response(
+            404, "JOB_NOT_FOUND", "The TTS job does not exist.", request_id
+        )
+    return _response(200, {"job": _public_job(item)})
 
 
 def _handle_preview(event: dict[str, Any], request_id: str | None) -> dict[str, Any]:
@@ -431,6 +705,26 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         if method == "GET":
             return _handle_get_profile(cognito_sub, request_id)
         return _handle_put_profile(event, cognito_sub, request_id)
+
+    tts_job_route = (
+        (method == "POST" and path == "/tts/jobs")
+        or (method == "GET" and path == "/tts/jobs")
+        or (method == "GET" and path == "/tts/jobs/{job_id}")
+    )
+    if tts_job_route:
+        owner_sub = _authenticated_sub(event)
+        if owner_sub is None:
+            return _error_response(
+                401,
+                "UNAUTHORIZED",
+                "A valid authenticated user is required.",
+                request_id,
+            )
+        if method == "POST":
+            return _handle_create_tts_job(event, owner_sub, request_id)
+        if path == "/tts/jobs":
+            return _handle_list_tts_jobs(owner_sub, request_id)
+        return _handle_get_tts_job(event, owner_sub, request_id)
 
     LOGGER.info(
         "api_route_not_implemented",
