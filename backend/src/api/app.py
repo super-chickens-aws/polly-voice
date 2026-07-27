@@ -5,10 +5,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
+from urllib.parse import unquote
 
 import boto3
 from botocore.exceptions import ClientError
@@ -23,6 +25,11 @@ DEFAULT_OUTPUT_FORMAT = "mp3"
 ALLOWED_ENGINES = {"standard", "neural"}
 ALLOWED_OUTPUT_FORMATS = {"mp3", "ogg_vorbis", "pcm"}
 OUTPUT_EXTENSIONS = {"mp3": "mp3", "ogg_vorbis": "ogg", "pcm": "pcm"}
+TTS_DOWNLOAD_FORMATS = {
+    "mp3": ("mp3", "audio/mpeg"),
+    "ogg_vorbis": ("ogg", "audio/ogg"),
+    "pcm": ("pcm", "audio/pcm"),
+}
 POLLY_VALIDATION_ERROR_CODES = {
     "EngineNotSupportedException",
     "InvalidSampleRateException",
@@ -442,6 +449,266 @@ def _public_job(item: dict[str, Any]) -> dict[str, Any]:
 
 def _public_stt_job(item: dict[str, Any]) -> dict[str, Any]:
     return {field: item[field] for field in STT_RESPONSE_FIELDS if field in item}
+
+
+def _download_job_item(
+    event: dict[str, Any],
+    owner_sub: str,
+    expected_type: str,
+    request_id: str | None,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    path_parameters = event.get("pathParameters")
+    job_id = (
+        path_parameters.get("job_id") if isinstance(path_parameters, dict) else None
+    )
+    if not isinstance(job_id, str) or not job_id.strip():
+        return None, _error_response(
+            400, "INVALID_JOB_ID", "A non-empty job_id is required.", request_id
+        )
+    job_id = job_id.strip()
+
+    try:
+        result = _create_conversion_jobs_table().get_item(Key={"job_id": job_id})
+    except ClientError as error:
+        LOGGER.exception(
+            "job_download_database_error",
+            extra={
+                "request_id": request_id,
+                "job_type": expected_type,
+                "error_code": _client_error_code(error),
+            },
+        )
+        return None, _error_response(
+            502, "DATABASE_ERROR", "Unable to access the requested job.", request_id
+        )
+    except Exception:
+        LOGGER.exception(
+            "job_download_unexpected_error",
+            extra={"request_id": request_id, "job_type": expected_type},
+        )
+        return None, _error_response(
+            500, "INTERNAL_ERROR", "An internal error occurred.", request_id
+        )
+
+    item = result.get("Item")
+    if (
+        not isinstance(item, dict)
+        or item.get("job_id") != job_id
+        or item.get("owner_sub") != owner_sub
+        or item.get("type") != expected_type
+    ):
+        return None, _error_response(
+            404, "JOB_NOT_FOUND", f"The {expected_type} job does not exist.", request_id
+        )
+    if item.get("status") != "COMPLETED":
+        return None, _error_response(
+            409,
+            "JOB_NOT_READY",
+            "The requested job is not ready for download.",
+            request_id,
+        )
+    return item, None
+
+
+def _is_safe_object_key(key: object, expected_prefix: str) -> bool:
+    if not isinstance(key, str) or not key:
+        return False
+    decoded_key = unquote(key)
+    if (
+        "\\" in key
+        or "\\" in decoded_key
+        or "://" in key
+        or "://" in decoded_key
+        or not key.startswith(expected_prefix)
+        or not decoded_key.startswith(expected_prefix)
+        or key == expected_prefix
+        or decoded_key == expected_prefix
+    ):
+        return False
+    return all(
+        part not in {"", ".", ".."}
+        for candidate in (key, decoded_key)
+        for part in candidate.split("/")
+    )
+
+
+def _safe_download_job_id(job_id: str) -> str:
+    safe_value = re.sub(r"[^A-Za-z0-9_-]", "-", job_id).strip("-")
+    return safe_value or "job"
+
+
+def _presign_download(
+    *,
+    job_id: str,
+    job_type: str,
+    object_key: str,
+    content_type: str,
+    file_name: str,
+    request_id: str | None,
+) -> dict[str, Any]:
+    try:
+        bucket_name = os.environ["MEDIA_BUCKET_NAME"]
+        expires_in = int(os.environ.get("PRESIGNED_URL_TTL_SECONDS", "900"))
+    except Exception:
+        LOGGER.exception(
+            "job_download_configuration_error",
+            extra={"request_id": request_id, "job_type": job_type, "job_id": job_id},
+        )
+        return _error_response(
+            500, "INTERNAL_ERROR", "An internal error occurred.", request_id
+        )
+
+    try:
+        download_url = _create_s3_client().generate_presigned_url(
+            "get_object",
+            Params={
+                "Bucket": bucket_name,
+                "Key": object_key,
+                "ResponseContentType": content_type,
+                "ResponseContentDisposition": f'attachment; filename="{file_name}"',
+            },
+            ExpiresIn=expires_in,
+        )
+    except ClientError as error:
+        LOGGER.exception(
+            "job_download_storage_error",
+            extra={
+                "request_id": request_id,
+                "job_type": job_type,
+                "job_id": job_id,
+                "error_code": _client_error_code(error),
+            },
+        )
+        return _error_response(
+            502, "STORAGE_ERROR", "Unable to prepare the download.", request_id
+        )
+    except Exception:
+        LOGGER.exception(
+            "job_download_storage_error",
+            extra={"request_id": request_id, "job_type": job_type, "job_id": job_id},
+        )
+        return _error_response(
+            502, "STORAGE_ERROR", "Unable to prepare the download.", request_id
+        )
+
+    return _response(
+        200,
+        {
+            "job": {
+                "job_id": job_id,
+                "type": job_type,
+                "status": "COMPLETED",
+            },
+            "download": {
+                "method": "GET",
+                "url": download_url,
+                "expires_in": expires_in,
+                "content_type": content_type,
+                "file_name": file_name,
+            },
+        },
+    )
+
+
+def _handle_download_tts_job(
+    event: dict[str, Any], owner_sub: str, request_id: str | None
+) -> dict[str, Any]:
+    item, error_response = _download_job_item(
+        event, owner_sub, "TTS", request_id
+    )
+    if error_response is not None:
+        return error_response
+    if item is None:
+        return _error_response(
+            500, "INTERNAL_ERROR", "An internal error occurred.", request_id
+        )
+
+    job_id = str(item["job_id"])
+    output_key = item.get("output_key")
+    expected_prefix = f"output/tts/jobs/{job_id}/"
+    output_format = item.get("output_format")
+    format_details = (
+        TTS_DOWNLOAD_FORMATS.get(output_format)
+        if isinstance(output_format, str)
+        else None
+    )
+    if format_details is None and isinstance(output_key, str):
+        extension_to_format = {
+            ".mp3": TTS_DOWNLOAD_FORMATS["mp3"],
+            ".ogg": TTS_DOWNLOAD_FORMATS["ogg_vorbis"],
+            ".pcm": TTS_DOWNLOAD_FORMATS["pcm"],
+        }
+        format_details = next(
+            (
+                details
+                for suffix, details in extension_to_format.items()
+                if output_key.lower().endswith(suffix)
+            ),
+            None,
+        )
+    if (
+        not _is_safe_object_key(output_key, expected_prefix)
+        or format_details is None
+        or not isinstance(output_key, str)
+        or not output_key.lower().endswith(f".{format_details[0]}")
+    ):
+        return _error_response(
+            409,
+            "DOWNLOAD_NOT_AVAILABLE",
+            "The completed job does not have a valid download object.",
+            request_id,
+        )
+
+    extension, content_type = format_details
+    file_name = f"polly-voice-{_safe_download_job_id(job_id)}.{extension}"
+    return _presign_download(
+        job_id=job_id,
+        job_type="TTS",
+        object_key=output_key,
+        content_type=content_type,
+        file_name=file_name,
+        request_id=request_id,
+    )
+
+
+def _handle_download_stt_job(
+    event: dict[str, Any], owner_sub: str, request_id: str | None
+) -> dict[str, Any]:
+    item, error_response = _download_job_item(
+        event, owner_sub, "STT", request_id
+    )
+    if error_response is not None:
+        return error_response
+    if item is None:
+        return _error_response(
+            500, "INTERNAL_ERROR", "An internal error occurred.", request_id
+        )
+
+    job_id = str(item["job_id"])
+    transcript_key = item.get("transcript_key") or item.get("output_key")
+    expected_key = f"output/stt/jobs/{job_id}/transcript.json"
+    if (
+        not _is_safe_object_key(
+            transcript_key, f"output/stt/jobs/{job_id}/"
+        )
+        or transcript_key != expected_key
+    ):
+        return _error_response(
+            409,
+            "DOWNLOAD_NOT_AVAILABLE",
+            "The completed job does not have a valid download object.",
+            request_id,
+        )
+
+    file_name = f"transcript-{_safe_download_job_id(job_id)}.json"
+    return _presign_download(
+        job_id=job_id,
+        job_type="STT",
+        object_key=expected_key,
+        content_type="application/json",
+        file_name=file_name,
+        request_id=request_id,
+    )
 
 
 def _handle_get_profile(cognito_sub: str, request_id: str | None) -> dict[str, Any]:
@@ -994,6 +1261,21 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         if method == "GET":
             return _handle_get_profile(cognito_sub, request_id)
         return _handle_put_profile(event, cognito_sub, request_id)
+
+    download_routes = {
+        "/tts/jobs/{job_id}/download": _handle_download_tts_job,
+        "/stt/jobs/{job_id}/download": _handle_download_stt_job,
+    }
+    if method == "GET" and path in download_routes:
+        owner_sub = _authenticated_sub(event)
+        if owner_sub is None:
+            return _error_response(
+                401,
+                "UNAUTHORIZED",
+                "A valid authenticated user is required.",
+                request_id,
+            )
+        return download_routes[path](event, owner_sub, request_id)
 
     tts_job_route = (
         (method == "POST" and path == "/tts/jobs")

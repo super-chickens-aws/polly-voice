@@ -70,8 +70,13 @@ class FakePolly:
 
 
 class FakeS3:
-    def __init__(self, put_error: ClientError | None = None) -> None:
+    def __init__(
+        self,
+        put_error: ClientError | None = None,
+        presign_error: Exception | None = None,
+    ) -> None:
         self.put_error = put_error
+        self.presign_error = presign_error
         self.put_calls: list[dict[str, object]] = []
         self.presign_calls: list[dict[str, object]] = []
 
@@ -82,6 +87,8 @@ class FakeS3:
 
     def generate_presigned_url(self, operation: str, **kwargs: object) -> str:
         self.presign_calls.append({"operation": operation, **kwargs})
+        if self.presign_error is not None:
+            raise self.presign_error
         return "https://example.test/presigned-audio"
 
 
@@ -257,7 +264,10 @@ def _job_event(
     }
     if payload is not None:
         event["body"] = json.dumps(payload)
-    if resource == "/tts/jobs/{job_id}":
+    if resource in {
+        "/tts/jobs/{job_id}",
+        "/tts/jobs/{job_id}/download",
+    }:
         event["pathParameters"] = {} if job_id is None else {"job_id": job_id}
     return event
 
@@ -1207,7 +1217,10 @@ def _stt_event(
     }
     if payload is not None:
         event["body"] = json.dumps(payload)
-    if resource == "/stt/jobs/{job_id}":
+    if resource in {
+        "/stt/jobs/{job_id}",
+        "/stt/jobs/{job_id}/download",
+    }:
         event["pathParameters"] = {} if job_id is None else {"job_id": job_id}
     return event
 
@@ -1545,22 +1558,391 @@ def test_get_stt_job_detail_inaccessible_records_return_404(
     assert json.loads(response["body"])["error"]["code"] == "JOB_NOT_FOUND"
 
 
-def test_stt_download_and_delete_routes_remain_501() -> None:
+def _completed_download_job(job_type: str, job_id: str = "job-1") -> dict[str, object]:
+    common: dict[str, object] = {
+        "job_id": job_id,
+        "owner_sub": "authenticated-user",
+        "type": job_type,
+        "status": "COMPLETED",
+    }
+    if job_type == "TTS":
+        common.update(
+            {
+                "output_format": "mp3",
+                "output_key": f"output/tts/jobs/{job_id}/audio.task.mp3",
+            }
+        )
+    else:
+        common["transcript_key"] = (
+            f"output/stt/jobs/{job_id}/transcript.json"
+        )
+    return common
+
+
+def _download_event(
+    job_type: str,
+    *,
+    job_id: str | None = "job-1",
+    authenticated: bool = True,
+) -> dict[str, Any]:
+    route = f"/{job_type.lower()}/jobs/{{job_id}}/download"
+    event: dict[str, Any] = {
+        "httpMethod": "GET",
+        "resource": route,
+        "pathParameters": {} if job_id is None else {"job_id": job_id},
+    }
+    if authenticated:
+        event["requestContext"] = {
+            "authorizer": {"claims": {"sub": "authenticated-user"}}
+        }
+    return event
+
+
+def _download_response(
+    monkeypatch: Any,
+    job_type: str,
+    *,
+    item: dict[str, object] | None = None,
+    job_id: str | None = "job-1",
+    get_error: ClientError | None = None,
+    presign_error: Exception | None = None,
+) -> tuple[dict[str, Any], FakeJobsTable, FakeS3]:
     handler = _load_handler("api")
-    download = handler.lambda_handler(
-        {
-            "httpMethod": "GET",
-            "resource": "/stt/jobs/{job_id}/download",
-        },
+    table = FakeJobsTable(item=item, get_error=get_error)
+    s3 = FakeS3(presign_error=presign_error)
+    monkeypatch.setattr(handler, "_create_conversion_jobs_table", lambda: table)
+    monkeypatch.setattr(handler, "_create_s3_client", lambda: s3)
+    monkeypatch.setenv("MEDIA_BUCKET_NAME", "unit-test-media")
+    monkeypatch.setenv("PRESIGNED_URL_TTL_SECONDS", "900")
+    response = handler.lambda_handler(
+        _download_event(job_type, job_id=job_id),
         LambdaContext(),
     )
-    delete = handler.lambda_handler(
-        {"httpMethod": "DELETE", "resource": "/stt/jobs/{job_id}"},
+    return response, table, s3
+
+
+@pytest.mark.parametrize("job_type", ["TTS", "STT"])
+def test_download_missing_authentication_returns_401(job_type: str) -> None:
+    handler = _load_handler("api")
+
+    response = handler.lambda_handler(
+        _download_event(job_type, authenticated=False),
         LambdaContext(),
     )
 
-    assert download["statusCode"] == 501
-    assert delete["statusCode"] == 501
+    assert response["statusCode"] == 401
+    assert json.loads(response["body"])["error"]["code"] == "UNAUTHORIZED"
+
+
+@pytest.mark.parametrize("job_type", ["TTS", "STT"])
+def test_download_missing_job_id_returns_400(
+    monkeypatch: Any, job_type: str
+) -> None:
+    response, table, s3 = _download_response(
+        monkeypatch, job_type, job_id=None
+    )
+
+    assert response["statusCode"] == 400
+    assert json.loads(response["body"])["error"]["code"] == "INVALID_JOB_ID"
+    assert table.get_calls == []
+    assert s3.presign_calls == []
+
+
+@pytest.mark.parametrize(
+    ("job_type", "item"),
+    [
+        ("TTS", None),
+        ("STT", None),
+        ("TTS", {**_completed_download_job("TTS"), "owner_sub": "another-user"}),
+        ("STT", {**_completed_download_job("STT"), "owner_sub": "another-user"}),
+        ("TTS", _completed_download_job("STT")),
+        ("STT", _completed_download_job("TTS")),
+    ],
+)
+def test_download_inaccessible_job_returns_404(
+    monkeypatch: Any,
+    job_type: str,
+    item: dict[str, object] | None,
+) -> None:
+    response, _, s3 = _download_response(
+        monkeypatch, job_type, item=item
+    )
+
+    assert response["statusCode"] == 404
+    assert json.loads(response["body"])["error"]["code"] == "JOB_NOT_FOUND"
+    assert s3.presign_calls == []
+
+
+@pytest.mark.parametrize("job_type", ["TTS", "STT"])
+def test_download_database_error_returns_502(
+    monkeypatch: Any, job_type: str
+) -> None:
+    response, _, s3 = _download_response(
+        monkeypatch,
+        job_type,
+        get_error=_client_error("InternalServerError"),
+    )
+
+    assert response["statusCode"] == 502
+    assert json.loads(response["body"])["error"]["code"] == "DATABASE_ERROR"
+    assert s3.presign_calls == []
+
+
+@pytest.mark.parametrize("job_type", ["TTS", "STT"])
+def test_download_presign_error_returns_502(
+    monkeypatch: Any, job_type: str
+) -> None:
+    response, _, _ = _download_response(
+        monkeypatch,
+        job_type,
+        item=_completed_download_job(job_type),
+        presign_error=_client_error("InternalError"),
+    )
+
+    assert response["statusCode"] == 502
+    assert json.loads(response["body"])["error"]["code"] == "STORAGE_ERROR"
+
+
+@pytest.mark.parametrize(
+    ("output_format", "extension", "content_type"),
+    [
+        ("mp3", "mp3", "audio/mpeg"),
+        ("ogg_vorbis", "ogg", "audio/ogg"),
+        ("pcm", "pcm", "audio/pcm"),
+    ],
+)
+def test_download_completed_tts_returns_presigned_attachment(
+    monkeypatch: Any,
+    output_format: str,
+    extension: str,
+    content_type: str,
+) -> None:
+    item = _completed_download_job("TTS")
+    item["output_format"] = output_format
+    item["output_key"] = f"output/tts/jobs/job-1/audio.task.{extension}"
+
+    response, table, s3 = _download_response(
+        monkeypatch, "TTS", item=item
+    )
+
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert body == {
+        "job": {
+            "job_id": "job-1",
+            "type": "TTS",
+            "status": "COMPLETED",
+        },
+        "download": {
+            "method": "GET",
+            "url": "https://example.test/presigned-audio",
+            "expires_in": 900,
+            "content_type": content_type,
+            "file_name": f"polly-voice-job-1.{extension}",
+        },
+    }
+    assert table.get_calls == [{"Key": {"job_id": "job-1"}}]
+    assert s3.presign_calls == [
+        {
+            "operation": "get_object",
+            "Params": {
+                "Bucket": "unit-test-media",
+                "Key": item["output_key"],
+                "ResponseContentType": content_type,
+                "ResponseContentDisposition": (
+                    f'attachment; filename="polly-voice-job-1.{extension}"'
+                ),
+            },
+            "ExpiresIn": 900,
+        }
+    ]
+    assert "owner_sub" not in body["job"]
+    assert "unit-test-media" not in response["body"]
+
+
+@pytest.mark.parametrize("status", ["QUEUED", "PROCESSING", "FAILED"])
+def test_download_tts_non_completed_job_returns_409(
+    monkeypatch: Any, status: str
+) -> None:
+    item = {**_completed_download_job("TTS"), "status": status}
+
+    response, _, s3 = _download_response(
+        monkeypatch, "TTS", item=item
+    )
+
+    assert response["statusCode"] == 409
+    assert json.loads(response["body"])["error"]["code"] == "JOB_NOT_READY"
+    assert s3.presign_calls == []
+
+
+@pytest.mark.parametrize(
+    "output_key",
+    [
+        None,
+        "output/tts/other.mp3",
+        "output/tts/jobs/other-job/audio.mp3",
+        "https://example.test/audio.mp3",
+        "output/tts/jobs/job-1/../audio.mp3",
+        "output/tts/jobs/job-1/%2e%2e/audio.mp3",
+    ],
+)
+def test_download_tts_rejects_unsafe_output_key(
+    monkeypatch: Any, output_key: str | None
+) -> None:
+    item = _completed_download_job("TTS")
+    if output_key is None:
+        item.pop("output_key")
+    else:
+        item["output_key"] = output_key
+
+    response, _, s3 = _download_response(
+        monkeypatch, "TTS", item=item
+    )
+
+    assert response["statusCode"] == 409
+    assert (
+        json.loads(response["body"])["error"]["code"]
+        == "DOWNLOAD_NOT_AVAILABLE"
+    )
+    assert s3.presign_calls == []
+
+
+def test_download_completed_stt_returns_presigned_transcript(
+    monkeypatch: Any,
+) -> None:
+    item = _completed_download_job("STT")
+
+    response, table, s3 = _download_response(
+        monkeypatch, "STT", item=item
+    )
+
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert body == {
+        "job": {
+            "job_id": "job-1",
+            "type": "STT",
+            "status": "COMPLETED",
+        },
+        "download": {
+            "method": "GET",
+            "url": "https://example.test/presigned-audio",
+            "expires_in": 900,
+            "content_type": "application/json",
+            "file_name": "transcript-job-1.json",
+        },
+    }
+    assert table.get_calls == [{"Key": {"job_id": "job-1"}}]
+    assert s3.presign_calls == [
+        {
+            "operation": "get_object",
+            "Params": {
+                "Bucket": "unit-test-media",
+                "Key": "output/stt/jobs/job-1/transcript.json",
+                "ResponseContentType": "application/json",
+                "ResponseContentDisposition": (
+                    'attachment; filename="transcript-job-1.json"'
+                ),
+            },
+            "ExpiresIn": 900,
+        }
+    ]
+    assert "owner_sub" not in body["job"]
+    assert "unit-test-media" not in response["body"]
+
+
+def test_download_stt_falls_back_to_valid_output_key(
+    monkeypatch: Any,
+) -> None:
+    item = _completed_download_job("STT")
+    item["output_key"] = item.pop("transcript_key")
+
+    response, _, _ = _download_response(
+        monkeypatch, "STT", item=item
+    )
+
+    assert response["statusCode"] == 200
+
+
+@pytest.mark.parametrize(
+    "status", ["AWAITING_UPLOAD", "PROCESSING", "FAILED"]
+)
+def test_download_stt_non_completed_job_returns_409(
+    monkeypatch: Any, status: str
+) -> None:
+    item = {**_completed_download_job("STT"), "status": status}
+
+    response, _, s3 = _download_response(
+        monkeypatch, "STT", item=item
+    )
+
+    assert response["statusCode"] == 409
+    assert json.loads(response["body"])["error"]["code"] == "JOB_NOT_READY"
+    assert s3.presign_calls == []
+
+
+@pytest.mark.parametrize(
+    "transcript_key",
+    [
+        None,
+        "output/stt/other.json",
+        "output/stt/jobs/other-job/transcript.json",
+        "https://example.test/transcript.json",
+        "output/stt/jobs/job-1/../transcript.json",
+        "output/stt/jobs/job-1/%2e%2e/transcript.json",
+        "output/stt/jobs/job-1/other.json",
+    ],
+)
+def test_download_stt_rejects_unsafe_transcript_key(
+    monkeypatch: Any, transcript_key: str | None
+) -> None:
+    item = _completed_download_job("STT")
+    if transcript_key is None:
+        item.pop("transcript_key")
+    else:
+        item["transcript_key"] = transcript_key
+
+    response, _, s3 = _download_response(
+        monkeypatch, "STT", item=item
+    )
+
+    assert response["statusCode"] == 409
+    assert (
+        json.loads(response["body"])["error"]["code"]
+        == "DOWNLOAD_NOT_AVAILABLE"
+    )
+    assert s3.presign_calls == []
+
+
+@pytest.mark.parametrize("job_type", ["TTS", "STT"])
+def test_download_url_is_not_logged(
+    monkeypatch: Any, caplog: pytest.LogCaptureFixture, job_type: str
+) -> None:
+    response, _, _ = _download_response(
+        monkeypatch, job_type, item=_completed_download_job(job_type)
+    )
+
+    assert response["statusCode"] == 200
+    assert all(
+        "https://example.test/presigned-audio" not in record.getMessage()
+        for record in caplog.records
+    )
+
+
+@pytest.mark.parametrize("job_type", ["tts", "stt"])
+def test_delete_job_routes_remain_501(job_type: str) -> None:
+    handler = _load_handler("api")
+    response = handler.lambda_handler(
+        {
+            "httpMethod": "DELETE",
+            "resource": f"/{job_type}/jobs/{{job_id}}",
+            "pathParameters": {"job_id": "job-1"},
+        },
+        LambdaContext(),
+    )
+
+    assert response["statusCode"] == 501
+    assert json.loads(response["body"])["error"]["code"] == "NOT_IMPLEMENTED"
 
 
 def test_other_api_routes_still_return_501() -> None:
@@ -1571,29 +1953,6 @@ def test_other_api_routes_still_return_501() -> None:
 
     assert response["statusCode"] == 501
     assert json.loads(response["body"])["error"]["code"] == "NOT_IMPLEMENTED"
-
-
-def test_download_and_delete_tts_job_routes_still_return_501() -> None:
-    handler = _load_handler("api")
-    download = handler.lambda_handler(
-        {
-            "httpMethod": "GET",
-            "resource": "/tts/jobs/{job_id}/download",
-            "pathParameters": {"job_id": "job-1"},
-        },
-        LambdaContext(),
-    )
-    delete = handler.lambda_handler(
-        {
-            "httpMethod": "DELETE",
-            "resource": "/tts/jobs/{job_id}",
-            "pathParameters": {"job_id": "job-1"},
-        },
-        LambdaContext(),
-    )
-
-    assert download["statusCode"] == 501
-    assert delete["statusCode"] == 501
 
 
 class FakeWorkerTable:
