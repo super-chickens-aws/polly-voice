@@ -11,6 +11,7 @@ interface SttJobListProps {
   pollIssues: Record<string, SttPollIssue>
   onRefresh: () => void
   onRetryPolling: (jobId: string) => void
+  onRefreshJob: (jobId: string) => void
 }
 
 export function SttJobList({
@@ -19,6 +20,7 @@ export function SttJobList({
   pollIssues,
   onRefresh,
   onRetryPolling,
+  onRefreshJob,
 }: SttJobListProps) {
   if (
     (listState === 'idle' || listState === 'loading') &&
@@ -67,6 +69,7 @@ export function SttJobList({
               job={job}
               pollIssue={pollIssues[job.job_id]}
               onRetryPolling={onRetryPolling}
+              onRefreshJob={onRefreshJob}
             />
           ))}
         </div>

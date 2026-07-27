@@ -1,9 +1,11 @@
 import type { PollIssue, TtsJob } from './ttsJobTypes'
+import { useTtsDownload } from './useTtsDownload'
 
 interface TtsJobCardProps {
   job: TtsJob
   pollIssue?: PollIssue
   onRetryPolling: (jobId: string) => void
+  onRefreshJob: (jobId: string) => void
 }
 
 function formatTimestamp(timestamp?: number): string {
@@ -30,7 +32,26 @@ export function TtsJobCard({
   job,
   pollIssue,
   onRetryPolling,
+  onRefreshJob,
 }: TtsJobCardProps) {
+  const {
+    state: downloadState,
+    errorMessage: downloadError,
+    audioUrl,
+    fileName,
+    loadAudio,
+    downloadAudio,
+    onPlay,
+    onPause,
+    onEnded,
+    reportAudioError,
+  } = useTtsDownload(
+    job.job_id,
+    job.status === 'COMPLETED',
+    onRefreshJob,
+  )
+  const isLoading = downloadState === 'loading_url'
+
   return (
     <article className="history-card glass-subpanel">
       <div className="card-top">
@@ -66,10 +87,53 @@ export function TtsJobCard({
               Output metadata: <code>{job.output_key}</code>
             </p>
           )}
-          <p>
-            Audio download will be available after the download endpoint is
-            connected.
-          </p>
+          <div className="job-download-actions">
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              disabled={isLoading}
+              onClick={loadAudio}
+            >
+              {isLoading
+                ? 'Đang lấy audio...'
+                : audioUrl
+                  ? 'Tải lại audio'
+                  : 'Tải audio để phát'}
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              disabled={isLoading}
+              onClick={downloadAudio}
+            >
+              Tải audio xuống
+            </button>
+          </div>
+          {audioUrl && (
+            <div className="job-audio-player">
+              <audio
+                src={audioUrl}
+                controls
+                preload="metadata"
+                aria-label={`Audio của TTS job ${job.job_id}`}
+                onPlay={onPlay}
+                onPause={onPause}
+                onEnded={onEnded}
+                onError={reportAudioError}
+              />
+              {fileName && <span className="helper-text">{fileName}</span>}
+            </div>
+          )}
+          <div aria-live="polite">
+            {downloadState === 'audio_ready' && <p>Audio đã sẵn sàng.</p>}
+            {downloadState === 'playing' && <p>Audio đang phát.</p>}
+            {downloadState === 'paused' && <p>Audio đang tạm dừng.</p>}
+            {downloadState === 'error' && (
+              <p className="auth-error" role="alert">
+                {downloadError}
+              </p>
+            )}
+          </div>
         </div>
       )}
       {job.status === 'FAILED' && (

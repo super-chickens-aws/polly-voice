@@ -57,6 +57,7 @@ export function useTtsJobs(enabled: boolean) {
   const listControllerRef = useRef<AbortController | null>(null)
   const createControllerRef = useRef<AbortController | null>(null)
   const pollControllersRef = useRef(new Map<string, AbortController>())
+  const refreshControllersRef = useRef(new Map<string, AbortController>())
   const pollMetadataRef = useRef(new Map<string, PollMetadata>())
   const inFlightPollsRef = useRef(new Set<string>())
   const stoppedPollingRef = useRef(new Set<string>())
@@ -224,7 +225,11 @@ export function useTtsJobs(enabled: boolean) {
       listControllerRef.current?.abort()
       createControllerRef.current?.abort()
       pollControllersRef.current.forEach((controller) => controller.abort())
+      refreshControllersRef.current.forEach((controller) =>
+        controller.abort(),
+      )
       pollControllersRef.current.clear()
+      refreshControllersRef.current.clear()
       inFlightPollsRef.current.clear()
       pollMetadataRef.current.clear()
       stoppedPollingRef.current.clear()
@@ -240,6 +245,7 @@ export function useTtsJobs(enabled: boolean) {
 
     loadJobs()
     const pollControllers = pollControllersRef.current
+    const refreshControllers = refreshControllersRef.current
     const inFlightPolls = inFlightPollsRef.current
     const interval = window.setInterval(
       pollAllActiveJobs,
@@ -250,7 +256,9 @@ export function useTtsJobs(enabled: boolean) {
       listControllerRef.current?.abort()
       createControllerRef.current?.abort()
       pollControllers.forEach((controller) => controller.abort())
+      refreshControllers.forEach((controller) => controller.abort())
       pollControllers.clear()
+      refreshControllers.clear()
       inFlightPolls.clear()
     }
   }, [enabled, loadJobs, pollAllActiveJobs])
@@ -330,6 +338,49 @@ export function useTtsJobs(enabled: boolean) {
     [pollJob, setPollIssue],
   )
 
+  const refreshJob = useCallback(
+    (jobId: string) => {
+      if (!enabledRef.current) {
+        return
+      }
+      refreshControllersRef.current.get(jobId)?.abort()
+      const controller = new AbortController()
+      refreshControllersRef.current.set(jobId, controller)
+      void getTtsJob(authenticatedRequest, jobId, controller.signal)
+        .then((response) => {
+          if (controller.signal.aborted || !enabledRef.current) {
+            return
+          }
+          updateJobs((current) =>
+            upsertTtsJob(current, response.job, 'detail'),
+          )
+          setPollIssue(jobId)
+        })
+        .catch((error: unknown) => {
+          if (
+            controller.signal.aborted ||
+            !enabledRef.current ||
+            isAbortError(error)
+          ) {
+            return
+          }
+          if (
+            error instanceof ApiError &&
+            error.status === 404 &&
+            error.code === 'JOB_NOT_FOUND'
+          ) {
+            setPollIssue(jobId, 'unavailable')
+          }
+        })
+        .finally(() => {
+          if (refreshControllersRef.current.get(jobId) === controller) {
+            refreshControllersRef.current.delete(jobId)
+          }
+        })
+    },
+    [authenticatedRequest, setPollIssue, updateJobs],
+  )
+
   const clearCreateFeedback = useCallback(() => {
     setCreateState((current) =>
       current === 'creating' ? current : 'idle',
@@ -347,6 +398,7 @@ export function useTtsJobs(enabled: boolean) {
     loadJobs,
     create,
     retryPolling,
+    refreshJob,
     clearCreateFeedback,
   }
 }

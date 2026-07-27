@@ -1,9 +1,11 @@
 import type { SttJob, SttPollIssue } from './sttJobTypes'
+import { useSttTranscript } from './useSttTranscript'
 
 interface SttJobCardProps {
   job: SttJob
   pollIssue?: SttPollIssue
   onRetryPolling: (jobId: string) => void
+  onRefreshJob: (jobId: string) => void
 }
 
 function formatTimestamp(timestamp?: number): string {
@@ -29,7 +31,21 @@ export function SttJobCard({
   job,
   pollIssue,
   onRetryPolling,
+  onRefreshJob,
 }: SttJobCardProps) {
+  const {
+    state: transcriptState,
+    errorMessage: transcriptError,
+    transcript,
+    isLoading,
+    loadTranscript,
+    downloadTranscript,
+  } = useSttTranscript(
+    job.job_id,
+    job.status === 'COMPLETED',
+    onRefreshJob,
+  )
+
   return (
     <article className="history-card glass-subpanel">
       <div className="card-top">
@@ -71,10 +87,44 @@ export function SttJobCard({
               Output metadata: <code>{job.output_key}</code>
             </p>
           )}
-          <p>
-            Transcript download and content display will be available after the
-            authenticated download endpoint is connected.
-          </p>
+          <div className="job-download-actions">
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              disabled={isLoading}
+              onClick={loadTranscript}
+            >
+              {transcriptState === 'loading_url'
+                ? 'Đang lấy URL...'
+                : transcriptState === 'loading_transcript'
+                  ? 'Đang tải transcript...'
+                  : transcript === null
+                    ? 'Xem transcript'
+                    : 'Làm mới transcript'}
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              disabled={isLoading}
+              onClick={downloadTranscript}
+            >
+              Tải transcript JSON
+            </button>
+          </div>
+          <div aria-live="polite">
+            {isLoading && <p>Đang chuẩn bị transcript...</p>}
+            {transcriptState === 'error' && (
+              <p className="auth-error" role="alert">
+                {transcriptError}
+              </p>
+            )}
+          </div>
+          {transcript !== null && (
+            <div className="stt-transcript-result">
+              <strong>Nội dung transcript</strong>
+              <p>{transcript}</p>
+            </div>
+          )}
         </div>
       )}
       {job.status === 'FAILED' && (

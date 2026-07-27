@@ -30,6 +30,7 @@ export function SttPanel() {
     loadJobs,
     createAndUpload,
     retryPolling,
+    refreshJob,
     resetUploadFeedback,
   } = useSttJobs(isAuthenticated)
   const [file, setFile] = useState<File | null>(null)
@@ -191,6 +192,7 @@ export function SttPanel() {
         pollIssues={pollIssues}
         onRefresh={loadJobs}
         onRetryPolling={retryPolling}
+        onRefreshJob={refreshJob}
       />
     </div>
   )

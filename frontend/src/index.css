@@ -576,6 +576,40 @@ select, input[type="text"], input[type="email"], input[type="password"] {
   gap: 0.75rem;
 }
 
+.job-download-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+.job-audio-player {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-top: 0.75rem;
+}
+
+.job-audio-player audio {
+  width: 100%;
+}
+
+.stt-transcript-result {
+  margin-top: 0.75rem;
+  padding: 0.875rem;
+  border: 1px solid var(--input-border);
+  border-radius: 0.75rem;
+  background: var(--input-bg);
+}
+
+.stt-transcript-result p {
+  margin-top: 0.5rem;
+  color: var(--text-primary);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .card-top {
   display: flex;
   justify-content: space-between;

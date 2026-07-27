@@ -11,6 +11,7 @@ interface TtsJobListProps {
   pollIssues: Record<string, PollIssue>
   onRefresh: () => void
   onRetryPolling: (jobId: string) => void
+  onRefreshJob: (jobId: string) => void
 }
 
 export function TtsJobList({
@@ -19,6 +20,7 @@ export function TtsJobList({
   pollIssues,
   onRefresh,
   onRetryPolling,
+  onRefreshJob,
 }: TtsJobListProps) {
   if (
     (listState === 'idle' || listState === 'loading') &&
@@ -68,6 +70,7 @@ export function TtsJobList({
               job={job}
               pollIssue={pollIssues[job.job_id]}
               onRetryPolling={onRetryPolling}
+              onRefreshJob={onRefreshJob}
             />
           ))}
         </div>

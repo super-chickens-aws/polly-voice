@@ -26,6 +26,7 @@ export function AsyncTtsSection({
     loadJobs,
     create,
     retryPolling,
+    refreshJob,
   } = useTtsJobs(isAuthenticated)
   const trimmedTextLength = text.trim().length
   const canCreate =
@@ -110,6 +111,7 @@ export function AsyncTtsSection({
         pollIssues={pollIssues}
         onRefresh={loadJobs}
         onRetryPolling={retryPolling}
+        onRefreshJob={refreshJob}
       />
     </section>
   )
