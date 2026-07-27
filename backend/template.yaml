@@ -1,0 +1,978 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Polly Voice MVP serverless backend for the dev environment.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+    Description: Deployment environment name.
+
+  FrontendOrigin:
+    Type: String
+    Default: http://localhost:5173
+    AllowedPattern: ^https?://[A-Za-z0-9.-]+(?::[0-9]{1,5})?$
+    ConstraintDescription: Must be an HTTP or HTTPS origin without a trailing slash.
+
+  CognitoCallbackUrl:
+    Type: String
+    Default: http://localhost:5173/auth/callback
+    AllowedPattern: ^https?://.+$
+    ConstraintDescription: Must be a valid HTTP or HTTPS callback URL.
+
+  CognitoLogoutUrl:
+    Type: String
+    Default: http://localhost:5173/
+    AllowedPattern: ^https?://.+$
+    ConstraintDescription: Must be a valid HTTP or HTTPS logout URL.
+
+  CognitoDomainPrefix:
+    Type: String
+    MinLength: 1
+    MaxLength: 63
+    AllowedPattern: ^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$
+    ConstraintDescription: Use a globally unique lowercase Cognito domain prefix.
+
+  PresignedUrlTtlSeconds:
+    Type: Number
+    Default: 900
+    MinValue: 60
+    MaxValue: 3600
+    Description: Lifetime of generated S3 presigned URLs.
+
+  JobTtlDays:
+    Type: Number
+    Default: 30
+    MinValue: 1
+    MaxValue: 365
+    Description: Retention period used to calculate ConversionJobs expires_at.
+
+Rules:
+  DeployOnlyInUsEast1:
+    Assertions:
+      - Assert: !Equals
+          - !Ref AWS::Region
+          - us-east-1
+        AssertDescription: Polly Voice MVP must be deployed in us-east-1.
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Architectures:
+      - x86_64
+    MemorySize: 256
+    Timeout: 30
+    Tracing: Active
+    LoggingConfig:
+      LogFormat: JSON
+      ApplicationLogLevel: INFO
+      SystemLogLevel: INFO
+    Tags:
+      Application: polly-voice
+      Environment: !Ref Environment
+
+Resources:
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub polly-voice-${Environment}
+      UsernameAttributes:
+        - email
+      AutoVerifiedAttributes:
+        - email
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: false
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireLowercase: true
+          RequireUppercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+          TemporaryPasswordValidityDays: 7
+      UserAttributeUpdateSettings:
+        AttributesRequireVerificationBeforeUpdate:
+          - email
+      UserPoolTags:
+        Application: polly-voice
+        Environment: !Ref Environment
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub polly-voice-spa-${Environment}
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows:
+        - code
+      AllowedOAuthScopes:
+        - openid
+        - email
+        - profile
+      CallbackURLs:
+        - !Ref CognitoCallbackUrl
+      LogoutURLs:
+        - !Ref CognitoLogoutUrl
+      SupportedIdentityProviders:
+        - COGNITO
+      PreventUserExistenceErrors: ENABLED
+      EnableTokenRevocation: true
+      ExplicitAuthFlows:
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+      AccessTokenValidity: 1
+      IdTokenValidity: 1
+      RefreshTokenValidity: 30
+      TokenValidityUnits:
+        AccessToken: hours
+        IdToken: hours
+        RefreshToken: days
+
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Ref CognitoDomainPrefix
+      UserPoolId: !Ref UserPool
+
+  UsersTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: RetainExceptOnCreate
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub polly-voice-users-${Environment}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: cognito_sub
+          AttributeType: S
+      KeySchema:
+        - AttributeName: cognito_sub
+          KeyType: HASH
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+      Tags:
+        - Key: Application
+          Value: polly-voice
+        - Key: Environment
+          Value: !Ref Environment
+
+  ConversionJobsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: RetainExceptOnCreate
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub polly-voice-conversion-jobs-${Environment}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: job_id
+          AttributeType: S
+        - AttributeName: owner_sub
+          AttributeType: S
+        - AttributeName: created_at
+          AttributeType: N
+      KeySchema:
+        - AttributeName: job_id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: ownerSub-createdAt-index
+          KeySchema:
+            - AttributeName: owner_sub
+              KeyType: HASH
+            - AttributeName: created_at
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+      Tags:
+        - Key: Application
+          Value: polly-voice
+        - Key: Environment
+          Value: !Ref Environment
+
+  MediaBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      NotificationConfiguration:
+        EventBridgeConfiguration:
+          EventBridgeEnabled: true
+      CorsConfiguration:
+        CorsRules:
+          - AllowedOrigins:
+              - !Ref FrontendOrigin
+            AllowedMethods:
+              - GET
+              - PUT
+              - POST
+              - HEAD
+            AllowedHeaders:
+              - "*"
+            ExposedHeaders:
+              - ETag
+            MaxAge: 3000
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteTemporaryObjects
+            Prefix: temp/
+            Status: Enabled
+            ExpirationInDays: 7
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 7
+          - Id: DeleteTtsCacheObjects
+            Prefix: cache/tts/
+            Status: Enabled
+            ExpirationInDays: 30
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 30
+      Tags:
+        - Key: Application
+          Value: polly-voice
+        - Key: Environment
+          Value: !Ref Environment
+
+  TtsDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub polly-voice-tts-dlq-${Environment}
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+      Tags:
+        - Key: Application
+          Value: polly-voice
+        - Key: Environment
+          Value: !Ref Environment
+
+  TtsQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub polly-voice-tts-${Environment}
+      VisibilityTimeout: 180
+      MessageRetentionPeriod: 345600
+      SqsManagedSseEnabled: true
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt TtsDeadLetterQueue.Arn
+        maxReceiveCount: 5
+      Tags:
+        - Key: Application
+          Value: polly-voice
+        - Key: Environment
+          Value: !Ref Environment
+
+  SttDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub polly-voice-stt-dlq-${Environment}
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+      Tags:
+        - Key: Application
+          Value: polly-voice
+        - Key: Environment
+          Value: !Ref Environment
+
+  SttQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub polly-voice-stt-${Environment}
+      VisibilityTimeout: 180
+      MessageRetentionPeriod: 345600
+      SqsManagedSseEnabled: true
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt SttDeadLetterQueue.Arn
+        maxReceiveCount: 5
+      Tags:
+        - Key: Application
+          Value: polly-voice
+        - Key: Environment
+          Value: !Ref Environment
+
+  PollyCompletionTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub polly-voice-polly-completion-${Environment}
+      KmsMasterKeyId: alias/aws/sns
+      Tags:
+        - Key: Application
+          Value: polly-voice
+        - Key: Environment
+          Value: !Ref Environment
+
+  OperationsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub polly-voice-operations-${Environment}
+      KmsMasterKeyId: alias/aws/sns
+      Tags:
+        - Key: Application
+          Value: polly-voice
+        - Key: Environment
+          Value: !Ref Environment
+
+  ApiAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub /aws/apigateway/polly-voice-${Environment}
+      RetentionInDays: 14
+
+  ApiGatewayCloudWatchRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: apigateway.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs
+
+  ApiGatewayAccount:
+    Type: AWS::ApiGateway::Account
+    Properties:
+      CloudWatchRoleArn: !GetAtt ApiGatewayCloudWatchRole.Arn
+
+  PollyVoiceApi:
+    Type: AWS::Serverless::Api
+    DependsOn:
+      - ApiGatewayAccount
+    Properties:
+      Name: !Sub polly-voice-${Environment}
+      StageName: !Ref Environment
+      EndpointConfiguration:
+        Type: REGIONAL
+      Cors:
+        AllowOrigin: !Sub "'${FrontendOrigin}'"
+        AllowHeaders: "'Content-Type,Authorization,X-Amz-Date,X-Api-Key,X-Amz-Security-Token'"
+        AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
+        MaxAge: "'600'"
+      Auth:
+        DefaultAuthorizer: CognitoAuthorizer
+        AddDefaultAuthorizerToCorsPreflight: false
+        Authorizers:
+          CognitoAuthorizer:
+            UserPoolArn: !GetAtt UserPool.Arn
+            AuthorizationScopes:
+              - openid
+            Identity:
+              Header: Authorization
+              ReauthorizeEvery: 0
+      AccessLogSetting:
+        DestinationArn: !GetAtt ApiAccessLogGroup.Arn
+        Format: >-
+          {"requestId":"$context.requestId","ip":"$context.identity.sourceIp",
+          "requestTime":"$context.requestTime","httpMethod":"$context.httpMethod",
+          "resourcePath":"$context.resourcePath","status":"$context.status",
+          "responseLength":"$context.responseLength","integrationError":"$context.integrationErrorMessage"}
+      MethodSettings:
+        - ResourcePath: /*
+          HttpMethod: "*"
+          MetricsEnabled: true
+          DataTraceEnabled: false
+      TracingEnabled: true
+      Tags:
+        Application: polly-voice
+        Environment: !Ref Environment
+
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub polly-voice-api-${Environment}
+      CodeUri: src/api/
+      Handler: app.lambda_handler
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Environment
+          FRONTEND_ORIGIN: !Ref FrontendOrigin
+          USERS_TABLE_NAME: !Ref UsersTable
+          CONVERSION_JOBS_TABLE_NAME: !Ref ConversionJobsTable
+          MEDIA_BUCKET_NAME: !Ref MediaBucket
+          TTS_QUEUE_URL: !Ref TtsQueue
+          PRESIGNED_URL_TTL_SECONDS: !Ref PresignedUrlTtlSeconds
+          JOB_TTL_DAYS: !Ref JobTtlDays
+      Policies:
+        - Statement:
+            - Sid: ReadWriteUsers
+              Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt UsersTable.Arn
+            - Sid: ReadWriteConversionJobs
+              Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+                - dynamodb:Query
+                - dynamodb:UpdateItem
+              Resource:
+                - !GetAtt ConversionJobsTable.Arn
+                - !Sub ${ConversionJobsTable.Arn}/index/ownerSub-createdAt-index
+            - Sid: WriteMediaInputs
+              Effect: Allow
+              Action:
+                - s3:PutObject
+              Resource:
+                - !Sub ${MediaBucket.Arn}/input/stt/*
+                - !Sub ${MediaBucket.Arn}/input/tts/*
+                - !Sub ${MediaBucket.Arn}/cache/tts/*
+            - Sid: ReadMediaOutputs
+              Effect: Allow
+              Action:
+                - s3:GetObject
+              Resource:
+                - !Sub ${MediaBucket.Arn}/output/stt/*
+                - !Sub ${MediaBucket.Arn}/output/tts/*
+                - !Sub ${MediaBucket.Arn}/cache/tts/*
+            - Sid: EnqueueTtsJobs
+              Effect: Allow
+              Action:
+                - sqs:SendMessage
+              Resource: !GetAtt TtsQueue.Arn
+            - Sid: PreviewSpeech
+              Effect: Allow
+              Action:
+                - polly:SynthesizeSpeech
+                - polly:DescribeVoices
+              Resource: "*"
+      Events:
+        PublicTtsPreview:
+          Type: Api
+          Properties:
+            RestApiId: !Ref PollyVoiceApi
+            Path: /tts/preview
+            Method: POST
+            Auth:
+              Authorizer: NONE
+        GetProfile:
+          Type: Api
+          Properties:
+            RestApiId: !Ref PollyVoiceApi
+            Path: /profile
+            Method: GET
+        UpdateProfile:
+          Type: Api
+          Properties:
+            RestApiId: !Ref PollyVoiceApi
+            Path: /profile
+            Method: PUT
+        CreateTtsJob:
+          Type: Api
+          Properties:
+            RestApiId: !Ref PollyVoiceApi
+            Path: /tts/jobs
+            Method: POST
+        ListTtsJobs:
+          Type: Api
+          Properties:
+            RestApiId: !Ref PollyVoiceApi
+            Path: /tts/jobs
+            Method: GET
+        GetTtsJob:
+          Type: Api
+          Properties:
+            RestApiId: !Ref PollyVoiceApi
+            Path: /tts/jobs/{job_id}
+            Method: GET
+        DownloadTtsJob:
+          Type: Api
+          Properties:
+            RestApiId: !Ref PollyVoiceApi
+            Path: /tts/jobs/{job_id}/download
+            Method: GET
+        DeleteTtsJob:
+          Type: Api
+          Properties:
+            RestApiId: !Ref PollyVoiceApi
+            Path: /tts/jobs/{job_id}
+            Method: DELETE
+        CreateSttJob:
+          Type: Api
+          Properties:
+            RestApiId: !Ref PollyVoiceApi
+            Path: /stt/jobs
+            Method: POST
+        ListSttJobs:
+          Type: Api
+          Properties:
+            RestApiId: !Ref PollyVoiceApi
+            Path: /stt/jobs
+            Method: GET
+        GetSttJob:
+          Type: Api
+          Properties:
+            RestApiId: !Ref PollyVoiceApi
+            Path: /stt/jobs/{job_id}
+            Method: GET
+        DownloadSttJob:
+          Type: Api
+          Properties:
+            RestApiId: !Ref PollyVoiceApi
+            Path: /stt/jobs/{job_id}/download
+            Method: GET
+        DeleteSttJob:
+          Type: Api
+          Properties:
+            RestApiId: !Ref PollyVoiceApi
+            Path: /stt/jobs/{job_id}
+            Method: DELETE
+
+  TtsWorkerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub polly-voice-tts-worker-${Environment}
+      CodeUri: src/tts_worker/
+      Handler: app.lambda_handler
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Environment
+          CONVERSION_JOBS_TABLE_NAME: !Ref ConversionJobsTable
+          MEDIA_BUCKET_NAME: !Ref MediaBucket
+          POLLY_COMPLETION_TOPIC_ARN: !Ref PollyCompletionTopic
+      Policies:
+        - Statement:
+            - Sid: ConsumeTtsQueue
+              Effect: Allow
+              Action:
+                - sqs:ChangeMessageVisibility
+                - sqs:DeleteMessage
+                - sqs:GetQueueAttributes
+                - sqs:ReceiveMessage
+              Resource: !GetAtt TtsQueue.Arn
+            - Sid: UpdateTtsJobs
+              Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt ConversionJobsTable.Arn
+            - Sid: ReadTtsInputs
+              Effect: Allow
+              Action:
+                - s3:GetObject
+              Resource: !Sub ${MediaBucket.Arn}/input/tts/*
+            - Sid: WriteTtsOutputs
+              Effect: Allow
+              Action:
+                - s3:PutObject
+              Resource:
+                - !Sub ${MediaBucket.Arn}/output/tts/*
+                - !Sub ${MediaBucket.Arn}/cache/tts/*
+            - Sid: StartPollyTasks
+              Effect: Allow
+              Action:
+                - polly:StartSpeechSynthesisTask
+              Resource: "*"
+            - Sid: PublishPollyTaskStatus
+              Effect: Allow
+              Action:
+                - sns:Publish
+              Resource: !Ref PollyCompletionTopic
+      Events:
+        TtsQueueEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt TtsQueue.Arn
+            BatchSize: 5
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+
+  SttWorkerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub polly-voice-stt-worker-${Environment}
+      CodeUri: src/stt_worker/
+      Handler: app.lambda_handler
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Environment
+          CONVERSION_JOBS_TABLE_NAME: !Ref ConversionJobsTable
+          MEDIA_BUCKET_NAME: !Ref MediaBucket
+      Policies:
+        - Statement:
+            - Sid: ConsumeSttQueue
+              Effect: Allow
+              Action:
+                - sqs:ChangeMessageVisibility
+                - sqs:DeleteMessage
+                - sqs:GetQueueAttributes
+                - sqs:ReceiveMessage
+              Resource: !GetAtt SttQueue.Arn
+            - Sid: UpdateSttJobs
+              Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt ConversionJobsTable.Arn
+            - Sid: ReadSttInputs
+              Effect: Allow
+              Action:
+                - s3:GetObject
+              Resource: !Sub ${MediaBucket.Arn}/input/stt/*
+            - Sid: WriteSttOutputs
+              Effect: Allow
+              Action:
+                - s3:PutObject
+              Resource: !Sub ${MediaBucket.Arn}/output/stt/*
+            - Sid: StartTranscriptionJobs
+              Effect: Allow
+              Action:
+                - transcribe:StartTranscriptionJob
+              Resource: "*"
+      Events:
+        SttQueueEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt SttQueue.Arn
+            BatchSize: 5
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+
+  CompletionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub polly-voice-completion-${Environment}
+      CodeUri: src/completion/
+      Handler: app.lambda_handler
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Environment
+          CONVERSION_JOBS_TABLE_NAME: !Ref ConversionJobsTable
+          MEDIA_BUCKET_NAME: !Ref MediaBucket
+      Policies:
+        - Statement:
+            - Sid: CompleteConversionJobs
+              Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt ConversionJobsTable.Arn
+            - Sid: ReadConversionOutputs
+              Effect: Allow
+              Action:
+                - s3:GetObject
+              Resource:
+                - !Sub ${MediaBucket.Arn}/output/stt/*
+                - !Sub ${MediaBucket.Arn}/output/tts/*
+            - Sid: ReadServiceJobStatus
+              Effect: Allow
+              Action:
+                - polly:GetSpeechSynthesisTask
+                - transcribe:GetTranscriptionJob
+              Resource: "*"
+
+  ApiFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${ApiFunction}
+      RetentionInDays: 14
+
+  TtsWorkerFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${TtsWorkerFunction}
+      RetentionInDays: 14
+
+  SttWorkerFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${SttWorkerFunction}
+      RetentionInDays: 14
+
+  CompletionFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${CompletionFunction}
+      RetentionInDays: 14
+
+  PollyCompletionSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref PollyCompletionTopic
+      Protocol: lambda
+      Endpoint: !GetAtt CompletionFunction.Arn
+
+  AllowPollyCompletionTopicInvoke:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref CompletionFunction
+      Principal: sns.amazonaws.com
+      SourceArn: !Ref PollyCompletionTopic
+
+  S3ObjectCreatedRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub polly-voice-stt-upload-${Environment}
+      Description: Routes STT media uploads to the STT queue.
+      State: ENABLED
+      EventPattern:
+        source:
+          - aws.s3
+        detail-type:
+          - Object Created
+        detail:
+          bucket:
+            name:
+              - !Ref MediaBucket
+          object:
+            key:
+              - prefix: input/stt/
+      Targets:
+        - Arn: !GetAtt SttQueue.Arn
+          Id: SttQueueTarget
+
+  SttQueueEventBridgePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref SttQueue
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowUploadRuleToSend
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt SttQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !GetAtt S3ObjectCreatedRule.Arn
+
+  TranscribeJobStateRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub polly-voice-transcribe-state-${Environment}
+      Description: Invokes completion handling for terminal Transcribe jobs.
+      State: ENABLED
+      EventPattern:
+        source:
+          - aws.transcribe
+        detail-type:
+          - Transcribe Job State Change
+        detail:
+          TranscriptionJobStatus:
+            - COMPLETED
+            - FAILED
+      Targets:
+        - Arn: !GetAtt CompletionFunction.Arn
+          Id: CompletionFunctionTarget
+
+  AllowTranscribeRuleInvoke:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref CompletionFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt TranscribeJobStateRule.Arn
+
+  ApiFunctionErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub polly-voice-api-errors-${Environment}
+      AlarmDescription: ApiFunction reported one or more errors.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref ApiFunction
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OperationsTopic
+
+  TtsWorkerFunctionErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub polly-voice-tts-worker-errors-${Environment}
+      AlarmDescription: TtsWorkerFunction reported one or more errors.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref TtsWorkerFunction
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OperationsTopic
+
+  SttWorkerFunctionErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub polly-voice-stt-worker-errors-${Environment}
+      AlarmDescription: SttWorkerFunction reported one or more errors.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref SttWorkerFunction
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OperationsTopic
+
+  CompletionFunctionErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub polly-voice-completion-errors-${Environment}
+      AlarmDescription: CompletionFunction reported one or more errors.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref CompletionFunction
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OperationsTopic
+
+  TtsDeadLetterQueueAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub polly-voice-tts-dlq-messages-${Environment}
+      AlarmDescription: The TTS dead-letter queue contains messages.
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt TtsDeadLetterQueue.QueueName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OperationsTopic
+
+  SttDeadLetterQueueAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub polly-voice-stt-dlq-messages-${Environment}
+      AlarmDescription: The STT dead-letter queue contains messages.
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt SttDeadLetterQueue.QueueName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OperationsTopic
+
+Outputs:
+  RestApiUrl:
+    Description: Base URL of the dev REST API stage.
+    Value: !Sub https://${PollyVoiceApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/${Environment}
+
+  RestApiId:
+    Description: API Gateway REST API ID.
+    Value: !Ref PollyVoiceApi
+
+  StageName:
+    Description: API Gateway stage name.
+    Value: !Ref Environment
+
+  UserPoolId:
+    Description: Cognito User Pool ID.
+    Value: !Ref UserPool
+
+  UserPoolClientId:
+    Description: Cognito public SPA app client ID.
+    Value: !Ref UserPoolClient
+
+  CognitoDomain:
+    Description: Cognito managed login domain.
+    Value: !Sub https://${CognitoDomainPrefix}.auth.${AWS::Region}.${AWS::URLSuffix}
+
+  UsersTableName:
+    Description: Users DynamoDB table name.
+    Value: !Ref UsersTable
+
+  ConversionJobsTableName:
+    Description: ConversionJobs DynamoDB table name.
+    Value: !Ref ConversionJobsTable
+
+  MediaBucketName:
+    Description: Private media S3 bucket name.
+    Value: !Ref MediaBucket
+
+  TtsQueueUrl:
+    Description: TTS work queue URL.
+    Value: !Ref TtsQueue
+
+  SttQueueUrl:
+    Description: STT work queue URL.
+    Value: !Ref SttQueue
+
+  PollyCompletionTopicArn:
+    Description: Polly task completion SNS topic ARN.
+    Value: !Ref PollyCompletionTopic
+
+  OperationsTopicArn:
+    Description: Operations notification SNS topic ARN.
+    Value: !Ref OperationsTopic

@@ -1,0 +1,13 @@
+{
+  "version": "0",
+  "id": "local-event-id",
+  "detail-type": "Transcribe Job State Change",
+  "source": "aws.transcribe",
+  "time": "2026-07-26T00:00:00Z",
+  "region": "us-east-1",
+  "resources": [],
+  "detail": {
+    "TranscriptionJobName": "01JXYZEXAMPLESTT",
+    "TranscriptionJobStatus": "COMPLETED"
+  }
+}

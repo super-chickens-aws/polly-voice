@@ -1,0 +1,11 @@
+{
+  "resource": "/tts/preview",
+  "path": "/tts/preview",
+  "httpMethod": "POST",
+  "headers": {
+    "Content-Type": "application/json",
+    "Origin": "http://localhost:5173"
+  },
+  "body": "{\"text\":\"Hello from Polly Voice\",\"voice\":\"Joanna\",\"engine\":\"neural\"}",
+  "isBase64Encoded": false
+}

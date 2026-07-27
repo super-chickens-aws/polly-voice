@@ -1,0 +1,17 @@
+[project]
+name = "polly-voice-backend"
+version = "0.1.0"
+description = "AWS SAM backend scaffold for Polly Voice."
+requires-python = ">=3.12,<3.13"
+
+[tool.pytest.ini_options]
+testpaths = ["tests/unit"]
+python_files = ["test_*.py"]
+addopts = "-q"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]

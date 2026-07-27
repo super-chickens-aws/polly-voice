@@ -1,0 +1,11 @@
+{
+  "Records": [
+    {
+      "EventSource": "aws:sns",
+      "Sns": {
+        "MessageId": "polly-message-1",
+        "Message": "{\"taskId\":\"local-polly-task\",\"taskStatus\":\"completed\"}"
+      }
+    }
+  ]
+}

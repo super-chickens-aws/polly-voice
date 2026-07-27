@@ -1,0 +1,9 @@
+{
+  "Records": [
+    {
+      "messageId": "tts-message-1",
+      "eventSource": "aws:sqs",
+      "body": "{\"job_id\":\"01JXYZEXAMPLETTS\",\"type\":\"TTS\"}"
+    }
+  ]
+}
