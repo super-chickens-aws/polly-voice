@@ -1,16 +1,12 @@
-import type { TabType, UserRole } from '../../types/app'
+import type { TabType } from '../../types/app'
 
 interface AppNavigationProps {
   activeTab: TabType
-  userRole: UserRole
-  historyCount: number
   onTabChange: (tab: TabType) => void
 }
 
 export function AppNavigation({
   activeTab,
-  userRole,
-  historyCount,
   onTabChange,
 }: AppNavigationProps) {
   return (
@@ -27,14 +23,12 @@ export function AppNavigation({
       >
         🎙️ Speech-to-Text
       </button>
-      {userRole === 'user' && (
-        <button
-          className={`nav-btn ${activeTab === 'history' ? 'active' : ''}`}
-          onClick={() => onTabChange('history')}
-        >
-          📜 Lịch Sử ({historyCount})
-        </button>
-      )}
+      <button
+        className={`nav-btn ${activeTab === 'history' ? 'active' : ''}`}
+        onClick={() => onTabChange('history')}
+      >
+        📜 Lịch Sử
+      </button>
     </nav>
   )
 }

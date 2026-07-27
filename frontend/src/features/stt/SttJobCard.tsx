@@ -9,9 +9,15 @@ interface SttJobCardProps {
 }
 
 function formatTimestamp(timestamp?: number): string {
-  return timestamp === undefined
-    ? '—'
-    : new Date(timestamp * 1000).toLocaleString('vi-VN')
+  if (
+    timestamp === undefined ||
+    !Number.isFinite(timestamp) ||
+    timestamp < 0
+  ) {
+    return '—'
+  }
+  const date = new Date(timestamp * 1000)
+  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString()
 }
 
 function statusLabel(status: SttJob['status']): string {
@@ -64,6 +70,17 @@ export function SttJobCard({
         <span>
           Language: <strong>{job.language_code ?? '—'}</strong>
         </span>
+      </div>
+      <div className="job-timestamps">
+        {job.created_at !== undefined && (
+          <span>Tạo: {formatTimestamp(job.created_at)}</span>
+        )}
+        {job.updated_at !== undefined && (
+          <span>Cập nhật: {formatTimestamp(job.updated_at)}</span>
+        )}
+        {job.completed_at !== undefined && (
+          <span>Hoàn thành: {formatTimestamp(job.completed_at)}</span>
+        )}
       </div>
 
       {job.status === 'AWAITING_UPLOAD' && (

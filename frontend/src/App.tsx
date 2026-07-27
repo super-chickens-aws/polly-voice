@@ -9,12 +9,7 @@ import { SttPanel } from './features/stt/SttPanel'
 import { TtsPanel } from './features/tts/TtsPanel'
 import { useTtsPreview } from './features/tts/useTtsPreview'
 import type { PreviewEngine } from './features/tts/ttsPreviewTypes'
-import type {
-  HistoryTab,
-  STTHistoryItem,
-  TTSHistoryItem,
-  TabType,
-} from './types/app'
+import type { TabType } from './types/app'
 
 const VOICES = [
   'Joanna',
@@ -50,11 +45,6 @@ function App() {
   const [audioCurrentTime, setAudioCurrentTime] = useState(0)
   const audioRef = useRef<HTMLAudioElement | null>(null)
 
-  const [ttsHistory, setTtsHistory] = useState<TTSHistoryItem[]>([])
-  const [sttHistory, setSttHistory] = useState<STTHistoryItem[]>([])
-  const [historyTab, setHistoryTab] = useState<HistoryTab>('tts')
-  const [searchQuery, setSearchQuery] = useState('')
-
   const userRole = status === 'authenticated' ? 'user' : 'guest'
   const userEmail =
     user?.email ?? user?.preferredUsername ?? user?.name ?? 'Authenticated User'
@@ -88,12 +78,6 @@ function App() {
       audio.removeEventListener('error', onError)
     }
   }, [currentAudioUrl, handleAudioFailure])
-
-  useEffect(() => {
-    if (status === 'anonymous' && activeTab === 'history') {
-      setActiveTab('tts')
-    }
-  }, [activeTab, status])
 
   const handleLogout = () => {
     if (activeTab === 'profile') {
@@ -145,19 +129,7 @@ function App() {
     setAudioDuration(0)
   }
 
-  const togglePlayAudio = (url?: string) => {
-    if (url && url !== currentAudioUrl) {
-      setCurrentAudioUrl(url)
-      setTimeout(() => {
-        if (audioRef.current) {
-          void audioRef.current
-            .play()
-            .then(() => setIsPlaying(true))
-            .catch(() => handleAudioFailure())
-        }
-      }, 100)
-      return
-    }
+  const togglePlayAudio = () => {
     if (!audioRef.current) {
       return
     }
@@ -181,9 +153,6 @@ function App() {
     return `${mins < 10 ? '0' : ''}${mins}:${secs < 10 ? '0' : ''}${secs}`
   }
 
-  const formatDate = (epoch: number) =>
-    new Date(epoch).toLocaleString('vi-VN')
-
   if (status === 'loading') {
     return (
       <div className="app-container">
@@ -205,7 +174,6 @@ function App() {
         activeTab={activeTab}
         userRole={userRole}
         userEmail={userEmail}
-        historyCount={ttsHistory.length + sttHistory.length}
         onTabChange={setActiveTab}
         onLogin={() => setShowAuthModal(true)}
         onLogout={handleLogout}
@@ -248,24 +216,7 @@ function App() {
           />
         )}
         {activeTab === 'stt' && <SttPanel />}
-        {activeTab === 'history' && userRole === 'user' && (
-          <HistoryPanel
-            historyTab={historyTab}
-            searchQuery={searchQuery}
-            ttsHistory={ttsHistory}
-            sttHistory={sttHistory}
-            onHistoryTabChange={setHistoryTab}
-            onSearchChange={setSearchQuery}
-            onPlayTts={togglePlayAudio}
-            onDeleteTts={(id) =>
-              setTtsHistory((items) => items.filter((item) => item.id !== id))
-            }
-            onDeleteStt={(id) =>
-              setSttHistory((items) => items.filter((item) => item.id !== id))
-            }
-            formatDate={formatDate}
-          />
-        )}
+        {activeTab === 'history' && <HistoryPanel />}
         {activeTab === 'profile' && <ProfilePanel />}
       </main>
       {showAuthModal && (

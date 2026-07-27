@@ -9,10 +9,15 @@ interface TtsJobCardProps {
 }
 
 function formatTimestamp(timestamp?: number): string {
-  if (timestamp === undefined) {
+  if (
+    timestamp === undefined ||
+    !Number.isFinite(timestamp) ||
+    timestamp < 0
+  ) {
     return '—'
   }
-  return new Date(timestamp * 1000).toLocaleString('vi-VN')
+  const date = new Date(timestamp * 1000)
+  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString()
 }
 
 function statusLabel(status: TtsJob['status']): string {
@@ -73,6 +78,17 @@ export function TtsJobCard({
         <span>
           Format: <strong>{job.output_format ?? '—'}</strong>
         </span>
+      </div>
+      <div className="job-timestamps">
+        {job.created_at !== undefined && (
+          <span>Tạo: {formatTimestamp(job.created_at)}</span>
+        )}
+        {job.updated_at !== undefined && (
+          <span>Cập nhật: {formatTimestamp(job.updated_at)}</span>
+        )}
+        {job.completed_at !== undefined && (
+          <span>Hoàn thành: {formatTimestamp(job.completed_at)}</span>
+        )}
       </div>
 
       {job.status === 'QUEUED' && <p>Job đang chờ worker xử lý.</p>}

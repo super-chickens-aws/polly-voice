@@ -5,7 +5,6 @@ interface AppHeaderProps {
   activeTab: TabType
   userRole: UserRole
   userEmail: string
-  historyCount: number
   onTabChange: (tab: TabType) => void
   onLogin: () => void
   onLogout: () => void
@@ -15,7 +14,6 @@ export function AppHeader({
   activeTab,
   userRole,
   userEmail,
-  historyCount,
   onTabChange,
   onLogin,
   onLogout,
@@ -34,8 +32,6 @@ export function AppHeader({
 
       <AppNavigation
         activeTab={activeTab}
-        userRole={userRole}
-        historyCount={historyCount}
         onTabChange={onTabChange}
       />
 
