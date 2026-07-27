@@ -1138,14 +1138,315 @@ def test_download_and_delete_tts_job_routes_still_return_501() -> None:
     assert delete["statusCode"] == 501
 
 
-def test_tts_worker_acknowledges_sqs_batch() -> None:
+class FakeWorkerTable:
+    def __init__(
+        self,
+        jobs: dict[str, dict[str, object]] | None = None,
+        *,
+        get_error: ClientError | None = None,
+        update_error: ClientError | None = None,
+    ) -> None:
+        self.jobs = jobs or {}
+        self.get_error = get_error
+        self.update_error = update_error
+        self.get_calls: list[dict[str, object]] = []
+        self.update_calls: list[dict[str, object]] = []
+
+    def get_item(self, **kwargs: Any) -> dict[str, object]:
+        self.get_calls.append(kwargs)
+        if self.get_error is not None:
+            raise self.get_error
+        job_id = kwargs["Key"]["job_id"]
+        item = self.jobs.get(job_id)
+        return {} if item is None else {"Item": item}
+
+    def update_item(self, **kwargs: object) -> None:
+        self.update_calls.append(kwargs)
+        if self.update_error is not None:
+            raise self.update_error
+
+
+class FakeWorkerPolly:
+    def __init__(
+        self,
+        *,
+        response: dict[str, object] | None = None,
+        error: ClientError | None = None,
+    ) -> None:
+        self.response = response or {
+            "SynthesisTask": {
+                "TaskId": "polly-task-1",
+                "TaskStatus": "scheduled",
+                "OutputUri": "s3://unit-test-media/output.mp3",
+            }
+        }
+        self.error = error
+        self.calls: list[dict[str, object]] = []
+
+    def start_speech_synthesis_task(self, **kwargs: object) -> dict[str, object]:
+        self.calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
+        return self.response
+
+
+def _worker_job(**overrides: object) -> dict[str, object]:
+    job: dict[str, object] = {
+        "job_id": "job-1",
+        "owner_sub": "authenticated-user",
+        "type": "TTS",
+        "status": "QUEUED",
+        "text": "Text to synthesize",
+        "voice": "Joanna",
+        "engine": "neural",
+        "output_format": "mp3",
+        "created_at": 100,
+        "updated_at": 100,
+        "expires_at": 200,
+    }
+    job.update(overrides)
+    return job
+
+
+def _worker_record(
+    message_id: str = "tts-message-1",
+    message: object | None = None,
+) -> dict[str, str]:
+    payload = {"job_id": "job-1", "type": "TTS"} if message is None else message
+    return {"messageId": message_id, "body": json.dumps(payload)}
+
+
+def _configure_worker(
+    monkeypatch: Any,
+    module: ModuleType,
+    table: FakeWorkerTable,
+    polly: FakeWorkerPolly,
+) -> None:
+    monkeypatch.setattr(module, "_create_jobs_table", lambda: table)
+    monkeypatch.setattr(module, "_create_polly_client", lambda: polly)
+    monkeypatch.setenv("CONVERSION_JOBS_TABLE_NAME", "unit-test-jobs")
+    monkeypatch.setenv("MEDIA_BUCKET_NAME", "unit-test-media")
+    monkeypatch.setenv(
+        "POLLY_COMPLETION_TOPIC_ARN",
+        "arn:aws:sns:us-east-1:123456789012:polly-completion",
+    )
+
+
+def _run_worker(
+    monkeypatch: Any,
+    *,
+    job: dict[str, object] | None = None,
+    table: FakeWorkerTable | None = None,
+    polly: FakeWorkerPolly | None = None,
+    record: dict[str, str] | None = None,
+) -> tuple[dict[str, object], FakeWorkerTable, FakeWorkerPolly]:
     module = _load_handler("tts_worker")
+    fake_table = table or FakeWorkerTable(
+        {} if job is None else {str(job["job_id"]): job}
+    )
+    fake_polly = polly or FakeWorkerPolly()
+    _configure_worker(monkeypatch, module, fake_table, fake_polly)
     response = module.lambda_handler(
-        {"Records": [{"messageId": "tts-message"}]},
-        LambdaContext(),
+        {"Records": [record or _worker_record()]}, LambdaContext()
+    )
+    return response, fake_table, fake_polly
+
+
+def test_tts_worker_starts_polly_synthesis_task(monkeypatch: Any) -> None:
+    response, _, polly = _run_worker(monkeypatch, job=_worker_job())
+
+    assert response == {"batchItemFailures": []}
+    assert len(polly.calls) == 1
+
+
+def test_tts_worker_passes_job_synthesis_fields_to_polly(monkeypatch: Any) -> None:
+    _, _, polly = _run_worker(monkeypatch, job=_worker_job())
+
+    call = polly.calls[0]
+    assert call["Text"] == "Text to synthesize"
+    assert call["VoiceId"] == "Joanna"
+    assert call["Engine"] == "neural"
+    assert call["OutputFormat"] == "mp3"
+    assert call["TextType"] == "text"
+
+
+def test_tts_worker_passes_media_bucket_to_polly(monkeypatch: Any) -> None:
+    _, _, polly = _run_worker(monkeypatch, job=_worker_job())
+
+    assert polly.calls[0]["OutputS3BucketName"] == "unit-test-media"
+
+
+def test_tts_worker_output_prefix_contains_job_id(monkeypatch: Any) -> None:
+    _, _, polly = _run_worker(monkeypatch, job=_worker_job())
+
+    assert (
+        polly.calls[0]["OutputS3KeyPrefix"]
+        == "output/tts/jobs/job-1/audio"
+    )
+
+
+def test_tts_worker_passes_completion_topic_to_polly(monkeypatch: Any) -> None:
+    _, _, polly = _run_worker(monkeypatch, job=_worker_job())
+
+    assert (
+        polly.calls[0]["SnsTopicArn"]
+        == "arn:aws:sns:us-east-1:123456789012:polly-completion"
+    )
+
+
+def test_tts_worker_updates_job_to_processing(monkeypatch: Any) -> None:
+    _, table, _ = _run_worker(monkeypatch, job=_worker_job())
+
+    update = table.update_calls[0]
+    assert update["Key"] == {"job_id": "job-1"}
+    assert update["ExpressionAttributeValues"][":processing"] == "PROCESSING"
+    assert "REMOVE error_code, error_message" in update["UpdateExpression"]
+    assert isinstance(update["ExpressionAttributeValues"][":updated_at"], int)
+
+
+def test_tts_worker_saves_polly_task_id(monkeypatch: Any) -> None:
+    _, table, _ = _run_worker(monkeypatch, job=_worker_job())
+
+    assert (
+        table.update_calls[0]["ExpressionAttributeValues"][":polly_task_id"]
+        == "polly-task-1"
+    )
+
+
+def test_tts_worker_saves_polly_output_uri(monkeypatch: Any) -> None:
+    _, table, _ = _run_worker(monkeypatch, job=_worker_job())
+
+    assert (
+        table.update_calls[0]["ExpressionAttributeValues"][":output_uri"]
+        == "s3://unit-test-media/output.mp3"
+    )
+
+
+def test_tts_worker_ignores_completed_job(monkeypatch: Any) -> None:
+    response, table, polly = _run_worker(
+        monkeypatch, job=_worker_job(status="COMPLETED")
     )
 
     assert response == {"batchItemFailures": []}
+    assert polly.calls == []
+    assert table.update_calls == []
+
+
+def test_tts_worker_existing_task_id_prevents_duplicate_polly_call(
+    monkeypatch: Any,
+) -> None:
+    response, table, polly = _run_worker(
+        monkeypatch, job=_worker_job(polly_task_id="existing-task")
+    )
+
+    assert response == {"batchItemFailures": []}
+    assert polly.calls == []
+    assert table.update_calls == []
+
+
+def test_tts_worker_missing_job_is_acknowledged(monkeypatch: Any) -> None:
+    response, _, polly = _run_worker(monkeypatch)
+
+    assert response == {"batchItemFailures": []}
+    assert polly.calls == []
+
+
+def test_tts_worker_wrong_job_type_is_acknowledged(monkeypatch: Any) -> None:
+    response, _, polly = _run_worker(
+        monkeypatch, job=_worker_job(type="STT")
+    )
+
+    assert response == {"batchItemFailures": []}
+    assert polly.calls == []
+
+
+def test_tts_worker_invalid_message_json_is_failed(monkeypatch: Any) -> None:
+    record = {"messageId": "bad-json", "body": "{"}
+    response, _, _ = _run_worker(monkeypatch, record=record)
+
+    assert response == {
+        "batchItemFailures": [{"itemIdentifier": "bad-json"}]
+    }
+
+
+def test_tts_worker_missing_job_id_is_failed(monkeypatch: Any) -> None:
+    response, _, _ = _run_worker(
+        monkeypatch,
+        record=_worker_record("missing-id", {"type": "TTS"}),
+    )
+
+    assert response == {
+        "batchItemFailures": [{"itemIdentifier": "missing-id"}]
+    }
+
+
+def test_tts_worker_polly_validation_error_marks_failed_without_retry(
+    monkeypatch: Any,
+) -> None:
+    polly = FakeWorkerPolly(
+        error=_client_error("EngineNotSupportedException")
+    )
+    response, table, _ = _run_worker(
+        monkeypatch, job=_worker_job(), polly=polly
+    )
+
+    assert response == {"batchItemFailures": []}
+    assert len(table.update_calls) == 1
+    values = table.update_calls[0]["ExpressionAttributeValues"]
+    assert values[":failed"] == "FAILED"
+    assert values[":error_code"] == "POLLY_VALIDATION_ERROR"
+    assert "EngineNotSupportedException" not in values[":error_message"]
+
+
+def test_tts_worker_transient_polly_error_retries_record(
+    monkeypatch: Any,
+) -> None:
+    polly = FakeWorkerPolly(error=_client_error("ServiceFailureException"))
+    response, table, _ = _run_worker(
+        monkeypatch, job=_worker_job(), polly=polly
+    )
+
+    assert response == {
+        "batchItemFailures": [{"itemIdentifier": "tts-message-1"}]
+    }
+    assert table.update_calls[0]["ExpressionAttributeValues"][":failed"] == "FAILED"
+
+
+def test_tts_worker_dynamodb_get_error_retries_record(monkeypatch: Any) -> None:
+    table = FakeWorkerTable(get_error=_client_error("InternalServerError"))
+    response, _, polly = _run_worker(monkeypatch, table=table)
+
+    assert response == {
+        "batchItemFailures": [{"itemIdentifier": "tts-message-1"}]
+    }
+    assert polly.calls == []
+
+
+def test_tts_worker_mixed_batch_reports_only_failed_message_ids(
+    monkeypatch: Any,
+) -> None:
+    module = _load_handler("tts_worker")
+    table = FakeWorkerTable(
+        {
+            "job-1": _worker_job(),
+            "job-2": _worker_job(job_id="job-2"),
+        }
+    )
+    polly = FakeWorkerPolly()
+    _configure_worker(monkeypatch, module, table, polly)
+    records = [
+        _worker_record("successful-1"),
+        {"messageId": "invalid-json", "body": "{"},
+        _worker_record("missing-job", {"job_id": "unknown", "type": "TTS"}),
+        _worker_record("successful-2", {"job_id": "job-2", "type": "TTS"}),
+    ]
+
+    response = module.lambda_handler({"Records": records}, LambdaContext())
+
+    assert response == {
+        "batchItemFailures": [{"itemIdentifier": "invalid-json"}]
+    }
+    assert len(polly.calls) == 2
 
 
 def test_stt_worker_acknowledges_sqs_batch() -> None:
