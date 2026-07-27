@@ -2860,11 +2860,345 @@ def test_completion_dynamodb_client_error_is_raised_for_retry(
         module.lambda_handler({"Records": [_sns_record()]}, LambdaContext())
 
 
-def test_completion_accepts_eventbridge_event() -> None:
+class FakeCompletionTranscribe:
+    def __init__(
+        self,
+        *,
+        job: dict[str, object] | None = None,
+        error: ClientError | None = None,
+    ) -> None:
+        self.job = job or {
+            "TranscriptionJobName": "stt-job-1",
+            "TranscriptionJobStatus": "COMPLETED",
+            "Transcript": {
+                "TranscriptFileUri": (
+                    "https://unit-test-media.s3.amazonaws.com/"
+                    "output/stt/jobs/stt-job-1/transcript.json"
+                )
+            },
+        }
+        self.error = error
+        self.calls: list[dict[str, object]] = []
+
+    def get_transcription_job(self, **kwargs: object) -> dict[str, object]:
+        self.calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
+        return {"TranscriptionJob": self.job}
+
+
+def _transcribe_completion_job(**overrides: object) -> dict[str, object]:
+    job: dict[str, object] = {
+        "job_id": "stt-job-1",
+        "owner_sub": "authenticated-user",
+        "type": "STT",
+        "status": "PROCESSING",
+        "transcribe_job_name": "stt-job-1",
+        "transcribe_job_status": "IN_PROGRESS",
+        "output_key": "output/stt/jobs/stt-job-1/transcript.json",
+        "created_at": 100,
+        "updated_at": 100,
+    }
+    job.update(overrides)
+    return job
+
+
+def _transcribe_event(
+    *,
+    job_name: object = "stt-job-1",
+    status: object = "COMPLETED",
+    detail: object | None = None,
+) -> dict[str, object]:
+    return {
+        "version": "0",
+        "source": "aws.transcribe",
+        "detail-type": "Transcribe Job State Change",
+        "detail": (
+            {
+                "TranscriptionJobName": job_name,
+                "TranscriptionJobStatus": status,
+            }
+            if detail is None
+            else detail
+        ),
+    }
+
+
+def _run_transcribe_completion(
+    monkeypatch: Any,
+    *,
+    application_job: dict[str, object] | None = None,
+    table: FakeCompletionTable | None = None,
+    transcribe: FakeCompletionTranscribe | None = None,
+    event: dict[str, object] | None = None,
+) -> tuple[dict[str, int], FakeCompletionTable, FakeCompletionTranscribe]:
     module = _load_handler("completion")
+    fake_table = table or FakeCompletionTable(
+        {}
+        if application_job is None
+        else {str(application_job["job_id"]): application_job}
+    )
+    fake_transcribe = transcribe or FakeCompletionTranscribe()
+    monkeypatch.setattr(module, "_create_jobs_table", lambda: fake_table)
+    monkeypatch.setattr(
+        module, "_create_transcribe_client", lambda: fake_transcribe
+    )
     response = module.lambda_handler(
-        {"source": "aws.transcribe", "detail-type": "Transcribe Job State Change"},
-        LambdaContext(),
+        event or _transcribe_event(), LambdaContext()
+    )
+    return response, fake_table, fake_transcribe
+
+
+def test_transcribe_completed_event_updates_job(monkeypatch: Any) -> None:
+    response, table, transcribe = _run_transcribe_completion(
+        monkeypatch, application_job=_transcribe_completion_job()
     )
 
-    assert response == {"processed": 1}
+    assert response == {
+        "processed": 1,
+        "completed": 1,
+        "failed": 0,
+        "processing": 0,
+        "ignored": 0,
+    }
+    assert transcribe.calls == [{"TranscriptionJobName": "stt-job-1"}]
+    assert table.get_calls == [
+        {"Key": {"job_id": "stt-job-1"}, "ConsistentRead": True}
+    ]
+    update = table.update_calls[0]
+    values = update["ExpressionAttributeValues"]
+    expected_key = "output/stt/jobs/stt-job-1/transcript.json"
+    assert values[":completed"] == "COMPLETED"
+    assert values[":transcribe_job_status"] == "COMPLETED"
+    assert values[":transcript_key"] == expected_key
+    assert values[":output_key"] == expected_key
+    assert isinstance(values[":completed_at"], int)
+    assert values[":updated_at"] == values[":completed_at"]
+    assert "REMOVE error_code, error_message" in update["UpdateExpression"]
+    serialized_update = json.dumps(update)
+    assert "TranscriptFileUri" not in serialized_update
+    assert "https://" not in serialized_update
+
+
+def test_transcribe_failed_event_stores_safe_failure(monkeypatch: Any) -> None:
+    raw_reason = "raw AWS failure with internal details"
+    transcribe = FakeCompletionTranscribe(
+        job={
+            "TranscriptionJobName": "stt-job-1",
+            "TranscriptionJobStatus": "FAILED",
+            "FailureReason": raw_reason,
+        }
+    )
+    response, table, _ = _run_transcribe_completion(
+        monkeypatch,
+        application_job=_transcribe_completion_job(),
+        transcribe=transcribe,
+        event=_transcribe_event(status="FAILED"),
+    )
+
+    assert response["failed"] == 1
+    values = table.update_calls[0]["ExpressionAttributeValues"]
+    assert values[":failed"] == "FAILED"
+    assert values[":error_code"] == "TRANSCRIBE_JOB_FAILED"
+    assert values[":error_message"] == (
+        "Amazon Transcribe could not complete the transcription job."
+    )
+    assert raw_reason not in json.dumps(table.update_calls[0])
+
+
+@pytest.mark.parametrize("status", ["QUEUED", "IN_PROGRESS"])
+def test_transcribe_nonterminal_status_remains_processing(
+    monkeypatch: Any, status: str
+) -> None:
+    transcribe = FakeCompletionTranscribe(
+        job={
+            "TranscriptionJobName": "stt-job-1",
+            "TranscriptionJobStatus": status,
+        }
+    )
+    response, table, _ = _run_transcribe_completion(
+        monkeypatch,
+        application_job=_transcribe_completion_job(),
+        transcribe=transcribe,
+    )
+
+    assert response["processing"] == 1
+    values = table.update_calls[0]["ExpressionAttributeValues"]
+    assert values[":processing"] == "PROCESSING"
+    assert values[":transcribe_job_status"] == status
+    assert ":completed_at" not in values
+
+
+def test_transcribe_already_completed_job_is_idempotent(
+    monkeypatch: Any,
+) -> None:
+    response, table, _ = _run_transcribe_completion(
+        monkeypatch,
+        application_job=_transcribe_completion_job(
+            status="COMPLETED",
+            transcript_key="output/stt/jobs/stt-job-1/transcript.json",
+            completed_at=123456,
+        ),
+    )
+
+    assert response["ignored"] == 1
+    assert table.update_calls == []
+    assert table.items["stt-job-1"]["completed_at"] == 123456
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        _transcribe_event(detail="not-an-object"),
+        _transcribe_event(job_name=""),
+        _transcribe_event(status="STARTED"),
+    ],
+)
+def test_transcribe_malformed_events_are_ignored(
+    monkeypatch: Any, event: dict[str, object]
+) -> None:
+    response, table, transcribe = _run_transcribe_completion(
+        monkeypatch, event=event
+    )
+
+    assert response["ignored"] == 1
+    assert table.get_calls == []
+    assert transcribe.calls == []
+
+
+def test_transcribe_missing_application_job_retries(monkeypatch: Any) -> None:
+    module = _load_handler("completion")
+    table = FakeCompletionTable()
+    transcribe = FakeCompletionTranscribe()
+    monkeypatch.setattr(module, "_create_jobs_table", lambda: table)
+    monkeypatch.setattr(
+        module, "_create_transcribe_client", lambda: transcribe
+    )
+
+    with pytest.raises(module.RetryableCompletionError):
+        module.lambda_handler(_transcribe_event(), LambdaContext())
+    assert transcribe.calls == []
+
+
+def test_transcribe_wrong_application_job_type_is_ignored(
+    monkeypatch: Any,
+) -> None:
+    response, table, transcribe = _run_transcribe_completion(
+        monkeypatch,
+        application_job=_transcribe_completion_job(type="TTS"),
+    )
+
+    assert response["ignored"] == 1
+    assert table.update_calls == []
+    assert transcribe.calls == []
+
+
+def test_transcribe_missing_stored_job_name_retries(monkeypatch: Any) -> None:
+    module = _load_handler("completion")
+    table = FakeCompletionTable(
+        {"stt-job-1": _transcribe_completion_job(transcribe_job_name=None)}
+    )
+    transcribe = FakeCompletionTranscribe()
+    monkeypatch.setattr(module, "_create_jobs_table", lambda: table)
+    monkeypatch.setattr(
+        module, "_create_transcribe_client", lambda: transcribe
+    )
+
+    with pytest.raises(module.RetryableCompletionError):
+        module.lambda_handler(_transcribe_event(), LambdaContext())
+    assert transcribe.calls == []
+
+
+def test_transcribe_mismatched_stored_job_name_is_ignored(
+    monkeypatch: Any,
+) -> None:
+    response, table, transcribe = _run_transcribe_completion(
+        monkeypatch,
+        application_job=_transcribe_completion_job(
+            transcribe_job_name="different-job"
+        ),
+    )
+
+    assert response["ignored"] == 1
+    assert table.update_calls == []
+    assert transcribe.calls == []
+
+
+def test_transcribe_completed_without_transcript_uri_retries(
+    monkeypatch: Any,
+) -> None:
+    module = _load_handler("completion")
+    table = FakeCompletionTable(
+        {"stt-job-1": _transcribe_completion_job()}
+    )
+    transcribe = FakeCompletionTranscribe(
+        job={
+            "TranscriptionJobName": "stt-job-1",
+            "TranscriptionJobStatus": "COMPLETED",
+        }
+    )
+    monkeypatch.setattr(module, "_create_jobs_table", lambda: table)
+    monkeypatch.setattr(
+        module, "_create_transcribe_client", lambda: transcribe
+    )
+
+    with pytest.raises(module.RetryableCompletionError):
+        module.lambda_handler(_transcribe_event(), LambdaContext())
+    assert table.update_calls == []
+
+
+def test_transcribe_unexpected_stored_output_key_retries(
+    monkeypatch: Any,
+) -> None:
+    module = _load_handler("completion")
+    table = FakeCompletionTable(
+        {
+            "stt-job-1": _transcribe_completion_job(
+                output_key="output/stt/jobs/other/transcript.json"
+            )
+        }
+    )
+    transcribe = FakeCompletionTranscribe()
+    monkeypatch.setattr(module, "_create_jobs_table", lambda: table)
+    monkeypatch.setattr(
+        module, "_create_transcribe_client", lambda: transcribe
+    )
+
+    with pytest.raises(module.RetryableCompletionError):
+        module.lambda_handler(_transcribe_event(), LambdaContext())
+    assert table.update_calls == []
+
+
+def test_transcribe_client_error_is_raised_for_retry(monkeypatch: Any) -> None:
+    module = _load_handler("completion")
+    table = FakeCompletionTable(
+        {"stt-job-1": _transcribe_completion_job()}
+    )
+    transcribe = FakeCompletionTranscribe(
+        error=_client_error("TranscriptionJobNotFoundException")
+    )
+    monkeypatch.setattr(module, "_create_jobs_table", lambda: table)
+    monkeypatch.setattr(
+        module, "_create_transcribe_client", lambda: transcribe
+    )
+
+    with pytest.raises(ClientError):
+        module.lambda_handler(_transcribe_event(), LambdaContext())
+
+
+def test_transcribe_dynamodb_error_is_raised_for_retry(
+    monkeypatch: Any,
+) -> None:
+    module = _load_handler("completion")
+    table = FakeCompletionTable(
+        get_error=_client_error("InternalServerError")
+    )
+    transcribe = FakeCompletionTranscribe()
+    monkeypatch.setattr(module, "_create_jobs_table", lambda: table)
+    monkeypatch.setattr(
+        module, "_create_transcribe_client", lambda: transcribe
+    )
+
+    with pytest.raises(ClientError):
+        module.lambda_handler(_transcribe_event(), LambdaContext())
+    assert transcribe.calls == []

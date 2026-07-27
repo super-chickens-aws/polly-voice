@@ -41,6 +41,11 @@ def _create_polly_client() -> Any:
     return boto3.client("polly")
 
 
+def _create_transcribe_client() -> Any:
+    """Create the Transcribe client lazily for runtime use and test injection."""
+    return boto3.client("transcribe")
+
+
 def _unix_timestamp() -> int:
     return int(datetime.now(UTC).timestamp())
 
@@ -333,19 +338,233 @@ def _process_sns_record(
     return "processing"
 
 
+def _transcribe_event_job_name(event: dict[str, Any]) -> str | None:
+    detail = event.get("detail")
+    if not isinstance(detail, dict):
+        return None
+    job_name = detail.get("TranscriptionJobName")
+    event_status = detail.get("TranscriptionJobStatus")
+    if not isinstance(job_name, str) or not job_name.strip():
+        return None
+    if event_status not in {"COMPLETED", "FAILED"}:
+        return None
+    return job_name.strip()
+
+
+def _update_transcribe_completed(
+    table: Any, job_id: str, expected_output_key: str
+) -> None:
+    timestamp = _unix_timestamp()
+    table.update_item(
+        Key={"job_id": job_id},
+        UpdateExpression=(
+            "SET #status = :completed, "
+            "transcribe_job_status = :transcribe_job_status, "
+            "output_key = :output_key, transcript_key = :transcript_key, "
+            "completed_at = :completed_at, updated_at = :updated_at "
+            "REMOVE error_code, error_message"
+        ),
+        ExpressionAttributeNames={"#status": "status"},
+        ExpressionAttributeValues={
+            ":completed": "COMPLETED",
+            ":transcribe_job_status": "COMPLETED",
+            ":output_key": expected_output_key,
+            ":transcript_key": expected_output_key,
+            ":completed_at": timestamp,
+            ":updated_at": timestamp,
+        },
+    )
+
+
+def _update_transcribe_failed(table: Any, job_id: str) -> None:
+    timestamp = _unix_timestamp()
+    table.update_item(
+        Key={"job_id": job_id},
+        UpdateExpression=(
+            "SET #status = :failed, "
+            "transcribe_job_status = :transcribe_job_status, "
+            "error_code = :error_code, error_message = :error_message, "
+            "completed_at = :completed_at, updated_at = :updated_at"
+        ),
+        ExpressionAttributeNames={"#status": "status"},
+        ExpressionAttributeValues={
+            ":failed": "FAILED",
+            ":transcribe_job_status": "FAILED",
+            ":error_code": "TRANSCRIBE_JOB_FAILED",
+            ":error_message": (
+                "Amazon Transcribe could not complete the transcription job."
+            ),
+            ":completed_at": timestamp,
+            ":updated_at": timestamp,
+        },
+    )
+
+
+def _update_transcribe_processing(
+    table: Any, job_id: str, authoritative_status: str
+) -> None:
+    table.update_item(
+        Key={"job_id": job_id},
+        UpdateExpression=(
+            "SET #status = :processing, "
+            "transcribe_job_status = :transcribe_job_status, "
+            "updated_at = :updated_at"
+        ),
+        ExpressionAttributeNames={"#status": "status"},
+        ExpressionAttributeValues={
+            ":processing": "PROCESSING",
+            ":transcribe_job_status": authoritative_status,
+            ":updated_at": _unix_timestamp(),
+        },
+    )
+
+
+def _process_transcribe_event(
+    event: dict[str, Any], request_id: str | None
+) -> str:
+    job_id = _transcribe_event_job_name(event)
+    if job_id is None:
+        LOGGER.warning(
+            "transcribe_completion_event_ignored",
+            extra={"request_id": request_id},
+        )
+        return "ignored"
+
+    table = _create_jobs_table()
+    result = table.get_item(Key={"job_id": job_id}, ConsistentRead=True)
+    job = result.get("Item")
+    if not isinstance(job, dict):
+        raise RetryableCompletionError(
+            "The STT application job is not available yet."
+        )
+    if job.get("type") != "STT":
+        LOGGER.warning(
+            "transcribe_completion_job_type_mismatch",
+            extra={"request_id": request_id, "job_id": job_id},
+        )
+        return "ignored"
+
+    stored_job_name = job.get("transcribe_job_name")
+    if not isinstance(stored_job_name, str) or not stored_job_name:
+        raise RetryableCompletionError(
+            "The Transcribe job mapping is not available yet."
+        )
+    if stored_job_name != job_id:
+        LOGGER.error(
+            "transcribe_completion_job_name_mismatch",
+            extra={"request_id": request_id, "job_id": job_id},
+        )
+        return "ignored"
+
+    response = _create_transcribe_client().get_transcription_job(
+        TranscriptionJobName=job_id
+    )
+    transcription_job = response.get("TranscriptionJob")
+    if not isinstance(transcription_job, dict):
+        raise RetryableCompletionError(
+            "Transcribe job details are unavailable."
+        )
+    if transcription_job.get("TranscriptionJobName") != job_id:
+        raise RetryableCompletionError(
+            "Transcribe returned an inconsistent job name."
+        )
+    authoritative_status = transcription_job.get("TranscriptionJobStatus")
+    if authoritative_status not in {
+        "COMPLETED",
+        "FAILED",
+        "QUEUED",
+        "IN_PROGRESS",
+    }:
+        raise RetryableCompletionError(
+            "Transcribe returned an unsupported job status."
+        )
+
+    expected_output_key = f"output/stt/jobs/{job_id}/transcript.json"
+    if job.get("status") == "COMPLETED":
+        if (
+            job.get("transcribe_job_name") == job_id
+            and job.get("transcript_key") == expected_output_key
+        ):
+            return "ignored"
+        raise RetryableCompletionError(
+            "Completed STT job output is inconsistent."
+        )
+    if (
+        job.get("status") == "FAILED"
+        and authoritative_status == "FAILED"
+        and job.get("error_code") == "TRANSCRIBE_JOB_FAILED"
+    ):
+        return "ignored"
+
+    if authoritative_status == "COMPLETED":
+        if job.get("output_key") != expected_output_key:
+            raise RetryableCompletionError(
+                "Stored STT output key is inconsistent."
+            )
+        transcript = transcription_job.get("Transcript")
+        transcript_uri = (
+            transcript.get("TranscriptFileUri")
+            if isinstance(transcript, dict)
+            else None
+        )
+        if not isinstance(transcript_uri, str) or not transcript_uri:
+            raise RetryableCompletionError(
+                "Completed Transcribe job has no transcript URI."
+            )
+        _update_transcribe_completed(table, job_id, expected_output_key)
+        return "completed"
+
+    if authoritative_status == "FAILED":
+        _update_transcribe_failed(table, job_id)
+        return "failed"
+
+    _update_transcribe_processing(table, job_id, authoritative_status)
+    return "processing"
+
+
+def _summary(outcome: str) -> dict[str, int]:
+    result = {
+        "processed": 1,
+        "completed": 0,
+        "failed": 0,
+        "processing": 0,
+        "ignored": 0,
+    }
+    result[outcome] += 1
+    return result
+
+
 def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, int]:
-    """Handle Polly SNS records or retain the Transcribe placeholder behavior."""
+    """Handle Polly SNS records and Transcribe EventBridge events."""
     records = event.get("Records")
     request_id = getattr(context, "aws_request_id", None)
     if not isinstance(records, list):
+        if (
+            event.get("source") == "aws.transcribe"
+            and event.get("detail-type") == "Transcribe Job State Change"
+        ):
+            try:
+                return _summary(_process_transcribe_event(event, request_id))
+            except ClientError as error:
+                LOGGER.exception(
+                    "transcribe_completion_aws_error",
+                    extra={
+                        "request_id": request_id,
+                        "error_code": _client_error_code(error),
+                    },
+                )
+                raise
+            except Exception:
+                LOGGER.exception(
+                    "transcribe_completion_retryable_error",
+                    extra={"request_id": request_id},
+                )
+                raise
         LOGGER.info(
-            "transcribe_completion_not_implemented",
-            extra={
-                "request_id": request_id,
-                "event_source": event.get("source", "unknown"),
-            },
+            "completion_event_ignored",
+            extra={"request_id": request_id},
         )
-        return {"processed": 1}
+        return _summary("ignored")
 
     counters = {
         "processed": len(records),
