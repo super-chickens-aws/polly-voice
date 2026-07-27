@@ -4,6 +4,10 @@ import {
     uploadAudio,
     getDownloadUrl
 } from "./src/services/s3Service.js";
+import {
+    saveHistory,
+    getHistory
+} from "./src/services/historyService.js";
 
 export const handler = async (event) => {
 
@@ -15,27 +19,23 @@ export const handler = async (event) => {
     if (path === "/tts/preview") {
         const body = JSON.parse(event.body);
         const {
+            text,
+            voiceId,
+            engine,
+            speed,
+            pitch,
+            volume
+        } = body;
 
-    text,
-
-    voiceId,
-
-    engine,
-
-    speed
-
-} = body;
         const audioStream = await generateSpeech({
+            text,
+            voiceId,
+            engine,
+            speed,
+            pitch,
+            volume
+        });
 
-    text,
-
-    voiceId,
-
-    engine,
-
-    speed
-
-});
         const bytes = await audioStream.transformToByteArray();
 
         return {
@@ -55,28 +55,37 @@ export const handler = async (event) => {
     if (path === "/tts") {
         const body = JSON.parse(event.body);
         const {
+            text,
+            voiceId,
+            engine,
+            speed,
+            pitch,
+            volume
+        } = body;
 
-    text,
-
-    voiceId,
-
-    engine
-
-} = body;
         const audioStream = await generateSpeech({
-
-    text,
-
-    voiceId,
-
-    engine,
-
-    speed
-
-});
+            text,
+            voiceId,
+            engine,
+            speed,
+            pitch,
+            volume
+        });
+        
         const fileName = `${Date.now()}.mp3`;
 
         const key = await uploadAudio(audioStream, fileName);
+        await saveHistory({
+            userId: event.requestContext.authorizer.jwt.claims.sub,
+            createdAt: new Date().toISOString(),
+            text,
+            voiceId,
+            engine,
+            speed,
+            pitch,
+            volume,
+            audioKey: key
+        });
         const downloadUrl = await getDownloadUrl(key);
 
         return {

@@ -17,6 +17,8 @@ export default function Dashboard() {
     const [voiceId, setVoiceId] = useState("Danielle");
     const [engine, setEngine] = useState("neural");
     const [speed, setSpeed] = useState(100);
+    const [pitch, setPitch] = useState(0);
+    const [volume, setVolume] = useState(100);
 
     useEffect(() => {
         loadProfile();
@@ -41,16 +43,14 @@ export default function Dashboard() {
 
         try {
             const data = await tts({
+                text,
+                voiceId,
+                engine,
+                speed,
+                pitch,
+                volume
+            });
 
-    text,
-
-    voiceId,
-
-    engine,
-
-    speed
-
-});
             const a = document.createElement("a");
             a.href = data.downloadUrl;
             a.target = "_self";
@@ -73,16 +73,13 @@ export default function Dashboard() {
 
         try {
             const url = await preview({
-
-    text,
-
-    voiceId,
-
-    engine,
-
-    speed
-
-});
+                text,
+                voiceId,
+                engine,
+                speed,
+                pitch,
+                volume
+            });
             setPreviewUrl(url);
         }
 
@@ -116,82 +113,103 @@ export default function Dashboard() {
             />
             <h3>Voice</h3>
 
-<select
-    value={voiceId}
-    onChange={(e) => setVoiceId(e.target.value)}
->
+        <select
+            value={voiceId}
+            onChange={(e) => setVoiceId(e.target.value)}
+        >
+            <option value="Danielle">Danielle</option>
+            <option value="Joanna">Joanna</option>
+            <option value="Matthew">Matthew</option>
+            <option value="Ruth">Ruth</option>
+        </select>
 
-    <option value="Danielle">Danielle</option>
+        <br /><br />
 
-    <option value="Joanna">Joanna</option>
+        <h3>Engine</h3>
 
-    <option value="Matthew">Matthew</option>
+        <label>
+            <input
+                type="radio"
+                value="neural"
+                checked={engine === "neural"}
+                onChange={(e) => setEngine(e.target.value)}
+            />
+            Neural
+        </label>
 
-    <option value="Ruth">Ruth</option>
+        {" "}
 
-</select>
+        <label>
+            <input
+                type="radio"
+                value="standard"
+                checked={engine === "standard"}
+                onChange={(e) => setEngine(e.target.value)}
+            />
+            Standard
+        </label>
 
-<br /><br />
+        <br /><br />
 
-<h3>Engine</h3>
+        <h3>Speed</h3>
 
-<label>
+        <input
+            type="range"
+            min={50}
+            max={200}
+            step={10}
+            value={speed}
+            onChange={(e) => setSpeed(Number(e.target.value))}
+        />
 
-    <input
-        type="radio"
-        value="neural"
-        checked={engine === "neural"}
-        onChange={(e) => setEngine(e.target.value)}
-    />
+        <span>
 
-    Neural
+            {" "}
 
-</label>
+            {speed}%
 
-{" "}
+        </span>
 
-<label>
+        <br /><br />
 
-    <input
-        type="radio"
-        value="standard"
-        checked={engine === "standard"}
-        onChange={(e) => setEngine(e.target.value)}
-    />
+        <h3>Pitch</h3>
 
-    Standard
+        <input
+            type="range"
+            min={-20}
+            max={20}
+            step={5}
+            value={pitch}
+            onChange={(e) => setPitch(Number(e.target.value))}
+        />
 
-</label>
+        <span>
 
-<br /><br />
+            {" "}
 
-<h3>Speed</h3>
+            {pitch}%
 
-<input
+        </span>
 
-    type="range"
+            <br /><br />
 
-    min={50}
+            <h3>Volume</h3>
 
-    max={200}
+            <input
+                type="range"
+                min={0}
+                max={200}
+                step={10}
+                value={volume}
+                onChange={(e) => setVolume(Number(e.target.value))}
+            />
 
-    step={10}
+            <span>
+                {" "}
+                {volume}%
+            </span>
 
-    value={speed}
-
-    onChange={(e) => setSpeed(Number(e.target.value))}
-
-/>
-
-<span>
-
-    {" "}
-
-    {speed}%
-
-</span>
-
-<br /><br />
+            <br /><br />
 
             <br /><br />
 
