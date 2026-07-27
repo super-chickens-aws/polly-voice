@@ -50,11 +50,6 @@ function App() {
   const [audioCurrentTime, setAudioCurrentTime] = useState(0)
   const audioRef = useRef<HTMLAudioElement | null>(null)
 
-  const [sttFile, setSttFile] = useState<File | null>(null)
-  const [isTranscribing, setIsTranscribing] = useState(false)
-  const [transcribeProgress, setTranscribeProgress] = useState(0)
-  const [sttResultText, setSttResultText] = useState('')
-
   const [ttsHistory, setTtsHistory] = useState<TTSHistoryItem[]>([])
   const [sttHistory, setSttHistory] = useState<STTHistoryItem[]>([])
   const [historyTab, setHistoryTab] = useState<HistoryTab>('tts')
@@ -177,58 +172,6 @@ function App() {
     }
   }
 
-  const handleSttFileUpload = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    if (!file) {
-      return
-    }
-    if (file.size > 10 * 1024 * 1024) {
-      alert('File vượt quá dung lượng tối đa 10MB')
-      return
-    }
-    setSttFile(file)
-    setSttResultText('')
-  }
-
-  const handleTranscribe = () => {
-    if (!sttFile) {
-      alert('Vui lòng chọn file âm thanh!')
-      return
-    }
-    setIsTranscribing(true)
-    setTranscribeProgress(10)
-    const interval = setInterval(() => {
-      setTranscribeProgress((previous) => {
-        if (previous >= 90) {
-          clearInterval(interval)
-          return 95
-        }
-        return previous + 25
-      })
-    }, 400)
-    setTimeout(() => {
-      clearInterval(interval)
-      setTranscribeProgress(100)
-      setIsTranscribing(false)
-      const result = `[Bản bóc băng tự động cho ${sttFile.name}]\n\nHello, this is Amazon Transcribe converting your spoken audio into clear text. Everything processed securely with AWS Polly Voice backend infrastructure.`
-      setSttResultText(result)
-      if (userRole === 'user') {
-        const now = Date.now()
-        setSttHistory((previous) => [
-          {
-            id: `stt-${now}`,
-            file_name: sttFile.name,
-            audio_s3_key: `stt/demo-authenticated-user/${sttFile.name}`,
-            audio_file_size: sttFile.size,
-            result_text: result,
-            created_at: now,
-          },
-          ...previous,
-        ])
-      }
-    }, 2200)
-  }
-
   const formatTime = (seconds: number) => {
     if (Number.isNaN(seconds)) {
       return '00:00'
@@ -304,18 +247,7 @@ function App() {
             formatTime={formatTime}
           />
         )}
-        {activeTab === 'stt' && (
-          <SttPanel
-            state={{
-              file: sttFile,
-              isTranscribing,
-              progress: transcribeProgress,
-              resultText: sttResultText,
-            }}
-            onFileUpload={handleSttFileUpload}
-            onTranscribe={handleTranscribe}
-          />
-        )}
+        {activeTab === 'stt' && <SttPanel />}
         {activeTab === 'history' && userRole === 'user' && (
           <HistoryPanel
             historyTab={historyTab}

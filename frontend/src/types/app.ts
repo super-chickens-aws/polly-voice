@@ -46,10 +46,3 @@ export interface TtsFormState {
   emphasis: string
   domainStyle: string
 }
-
-export interface SttViewState {
-  file: File | null
-  isTranscribing: boolean
-  progress: number
-  resultText: string
-}
