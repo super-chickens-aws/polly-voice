@@ -1,15 +1,10 @@
 import {
-
     PollyClient,
-
     SynthesizeSpeechCommand
-
 } from "@aws-sdk/client-polly";
 
 const client = new PollyClient({
-
     region: "ap-southeast-1"
-
 });
 
 export async function generateSpeech({
@@ -18,19 +13,31 @@ export async function generateSpeech({
 
     voiceId,
 
-    engine
+    engine,
+
+    speed
 
 }) {
 
+    const ssml = `
+<speak>
+    <prosody rate="${speed}%">
+        ${text}
+    </prosody>
+</speak>
+`;
+
     const command = new SynthesizeSpeechCommand({
 
-        Text: text,
-
-        OutputFormat: "mp3",
+        Engine: engine,
 
         VoiceId: voiceId,
 
-        Engine: engine
+        OutputFormat: "mp3",
+
+        TextType: "ssml",
+
+        Text: ssml
 
     });
 

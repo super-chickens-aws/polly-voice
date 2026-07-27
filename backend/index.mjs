@@ -20,7 +20,9 @@ export const handler = async (event) => {
 
     voiceId,
 
-    engine
+    engine,
+
+    speed
 
 } = body;
         const audioStream = await generateSpeech({
@@ -29,7 +31,9 @@ export const handler = async (event) => {
 
     voiceId,
 
-    engine
+    engine,
+
+    speed
 
 });
         const bytes = await audioStream.transformToByteArray();
@@ -65,7 +69,9 @@ export const handler = async (event) => {
 
     voiceId,
 
-    engine
+    engine,
+
+    speed
 
 });
         const fileName = `${Date.now()}.mp3`;

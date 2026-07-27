@@ -16,6 +16,7 @@ export default function Dashboard() {
     const [previewUrl, setPreviewUrl] = useState("");
     const [voiceId, setVoiceId] = useState("Danielle");
     const [engine, setEngine] = useState("neural");
+    const [speed, setSpeed] = useState(100);
 
     useEffect(() => {
         loadProfile();
@@ -45,7 +46,9 @@ export default function Dashboard() {
 
     voiceId,
 
-    engine
+    engine,
+
+    speed
 
 });
             const a = document.createElement("a");
@@ -75,7 +78,9 @@ export default function Dashboard() {
 
     voiceId,
 
-    engine
+    engine,
+
+    speed
 
 });
             setPreviewUrl(url);
@@ -157,6 +162,34 @@ export default function Dashboard() {
     Standard
 
 </label>
+
+<br /><br />
+
+<h3>Speed</h3>
+
+<input
+
+    type="range"
+
+    min={50}
+
+    max={200}
+
+    step={10}
+
+    value={speed}
+
+    onChange={(e) => setSpeed(Number(e.target.value))}
+
+/>
+
+<span>
+
+    {" "}
+
+    {speed}%
+
+</span>
 
 <br /><br />
 
