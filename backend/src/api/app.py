@@ -7,6 +7,7 @@ import logging
 import os
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
 import boto3
@@ -89,6 +90,16 @@ class JobValidationError(ValueError):
         self.message = message
 
 
+def _json_default(value: Any) -> int | float:
+    if isinstance(value, Decimal):
+        if value == value.to_integral_value():
+            return int(value)
+        return float(value)
+    raise TypeError(
+        f"Object of type {type(value).__name__} is not JSON serializable"
+    )
+
+
 def _response(status_code: int, body: dict[str, Any]) -> dict[str, Any]:
     return {
         "statusCode": status_code,
@@ -97,7 +108,11 @@ def _response(status_code: int, body: dict[str, Any]) -> dict[str, Any]:
             "Content-Type": "application/json",
             "Vary": "Origin",
         },
-        "body": json.dumps(body, separators=(",", ":")),
+        "body": json.dumps(
+            body,
+            separators=(",", ":"),
+            default=_json_default,
+        ),
     }
 
 

@@ -151,6 +151,55 @@ def _save_processing_job(
     )
 
 
+def _upsert_task_mapping(
+    table: Any,
+    application_job: dict[str, Any],
+    polly_task_id: str,
+) -> None:
+    timestamp = _unix_timestamp()
+    table.update_item(
+        Key={"job_id": f"POLLY_TASK#{polly_task_id}"},
+        UpdateExpression=(
+            "SET record_type = :record_type, "
+            "application_job_id = :application_job_id, "
+            "polly_task_id = :polly_task_id, "
+            "created_at = if_not_exists(created_at, :created_at), "
+            "updated_at = :updated_at, expires_at = :expires_at"
+        ),
+        ExpressionAttributeValues={
+            ":record_type": "POLLY_TASK_MAPPING",
+            ":application_job_id": application_job["job_id"],
+            ":polly_task_id": polly_task_id,
+            ":created_at": timestamp,
+            ":updated_at": timestamp,
+            ":expires_at": application_job["expires_at"],
+        },
+    )
+
+
+def _repair_task_mapping(
+    table: Any,
+    item: dict[str, Any],
+    polly_task_id: str,
+    request_id: str | None,
+    message_id: str,
+) -> bool:
+    try:
+        _upsert_task_mapping(table, item, polly_task_id)
+    except ClientError as error:
+        LOGGER.exception(
+            "tts_task_mapping_database_error",
+            extra={
+                "request_id": request_id,
+                "message_id": message_id,
+                "job_id": item.get("job_id"),
+                "error_code": _client_error_code(error),
+            },
+        )
+        return False
+    return True
+
+
 def _process_record(
     record: dict[str, Any], request_id: str | None
 ) -> bool:
@@ -213,9 +262,27 @@ def _process_record(
         )
         return True
 
-    if item.get("status") == "COMPLETED" or item.get("polly_task_id"):
+    stored_task_id = item.get("polly_task_id")
+    if isinstance(stored_task_id, str) and stored_task_id:
         LOGGER.info(
             "tts_job_already_started",
+            extra={
+                "request_id": request_id,
+                "message_id": message_id,
+                "job_id": job_id,
+            },
+        )
+        return _repair_task_mapping(
+            table,
+            item,
+            stored_task_id,
+            request_id,
+            message_id,
+        )
+
+    if item.get("status") == "COMPLETED":
+        LOGGER.info(
+            "tts_job_completed_without_task_mapping",
             extra={
                 "request_id": request_id,
                 "message_id": message_id,
@@ -350,6 +417,15 @@ def _process_record(
             request_id,
             polly_task_id=task["TaskId"],
         )
+        return False
+
+    if not _repair_task_mapping(
+        table,
+        item,
+        task["TaskId"],
+        request_id,
+        message_id,
+    ):
         return False
 
     return True

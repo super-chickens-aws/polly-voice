@@ -5,9 +5,12 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+from decimal import Decimal
 from pathlib import Path
 from types import ModuleType
 from typing import Any
+
+import pytest
 
 try:
     from botocore.exceptions import ClientError
@@ -186,6 +189,31 @@ def _load_handler(name: str) -> ModuleType:
 
 def _client_error(code: str) -> ClientError:
     return ClientError({"Error": {"Code": code, "Message": "test error"}}, "test")
+
+
+def test_api_response_serializes_integral_decimal_as_integer() -> None:
+    handler = _load_handler("api")
+
+    response = handler._response(200, {"value": Decimal("123")})
+
+    assert json.loads(response["body"]) == {"value": 123}
+    assert isinstance(json.loads(response["body"])["value"], int)
+
+
+def test_api_response_serializes_fractional_decimal_as_number() -> None:
+    handler = _load_handler("api")
+
+    response = handler._response(200, {"value": Decimal("12.5")})
+
+    assert json.loads(response["body"]) == {"value": 12.5}
+    assert isinstance(json.loads(response["body"])["value"], float)
+
+
+def test_api_response_rejects_unsupported_json_values() -> None:
+    handler = _load_handler("api")
+
+    with pytest.raises(TypeError):
+        handler._response(200, {"value": object()})
 
 
 def _preview_event(payload: object) -> dict[str, str]:
@@ -929,8 +957,8 @@ def test_get_tts_jobs_list_success(monkeypatch: Any) -> None:
                 "voice": "Joanna",
                 "engine": "neural",
                 "output_format": "mp3",
-                "created_at": 20,
-                "updated_at": 20,
+                "created_at": Decimal("20"),
+                "updated_at": Decimal("21"),
             },
             {
                 "job_id": "other-job",
@@ -948,6 +976,10 @@ def test_get_tts_jobs_list_success(monkeypatch: Any) -> None:
     jobs = json.loads(response["body"])["jobs"]
     assert len(jobs) == 1
     assert jobs[0]["job_id"] == "job-1"
+    assert jobs[0]["created_at"] == 20
+    assert jobs[0]["updated_at"] == 21
+    assert isinstance(jobs[0]["created_at"], int)
+    assert isinstance(jobs[0]["updated_at"], int)
 
 
 def test_get_tts_jobs_queries_owner_created_at_index(monkeypatch: Any) -> None:
@@ -1017,9 +1049,9 @@ def test_get_tts_job_detail_success(monkeypatch: Any) -> None:
         "voice": "Joanna",
         "engine": "neural",
         "output_format": "mp3",
-        "created_at": 10,
-        "updated_at": 20,
-        "completed_at": 20,
+        "created_at": Decimal("123"),
+        "updated_at": Decimal("456"),
+        "completed_at": Decimal("789"),
         "output_key": "outputs/job-1.mp3",
     }
     table = FakeJobsTable(item=item)
@@ -1034,6 +1066,13 @@ def test_get_tts_job_detail_success(monkeypatch: Any) -> None:
     assert json.loads(response["body"]) == {
         "job": {key: value for key, value in item.items() if key != "owner_sub"}
     }
+    job = json.loads(response["body"])["job"]
+    assert job["created_at"] == 123
+    assert job["updated_at"] == 456
+    assert job["completed_at"] == 789
+    assert isinstance(job["created_at"], int)
+    assert isinstance(job["updated_at"], int)
+    assert isinstance(job["completed_at"], int)
     assert table.get_calls == [{"Key": {"job_id": "job-1"}}]
 
 
@@ -1145,10 +1184,12 @@ class FakeWorkerTable:
         *,
         get_error: ClientError | None = None,
         update_error: ClientError | None = None,
+        mapping_error: ClientError | None = None,
     ) -> None:
         self.jobs = jobs or {}
         self.get_error = get_error
         self.update_error = update_error
+        self.mapping_error = mapping_error
         self.get_calls: list[dict[str, object]] = []
         self.update_calls: list[dict[str, object]] = []
 
@@ -1162,6 +1203,12 @@ class FakeWorkerTable:
 
     def update_item(self, **kwargs: object) -> None:
         self.update_calls.append(kwargs)
+        key = kwargs["Key"]
+        if (
+            self.mapping_error is not None
+            and str(key["job_id"]).startswith("POLLY_TASK#")
+        ):
+            raise self.mapping_error
         if self.update_error is not None:
             raise self.update_error
 
@@ -1322,6 +1369,52 @@ def test_tts_worker_saves_polly_output_uri(monkeypatch: Any) -> None:
     )
 
 
+def test_tts_worker_stores_polly_task_mapping(monkeypatch: Any) -> None:
+    _, table, _ = _run_worker(monkeypatch, job=_worker_job())
+
+    mapping = table.update_calls[1]
+    assert mapping["Key"] == {"job_id": "POLLY_TASK#polly-task-1"}
+    assert "if_not_exists(created_at, :created_at)" in mapping["UpdateExpression"]
+    assert (
+        mapping["ExpressionAttributeValues"][":record_type"]
+        == "POLLY_TASK_MAPPING"
+    )
+
+
+def test_tts_worker_mapping_contains_application_and_polly_task_ids(
+    monkeypatch: Any,
+) -> None:
+    _, table, _ = _run_worker(monkeypatch, job=_worker_job())
+
+    values = table.update_calls[1]["ExpressionAttributeValues"]
+    assert values[":application_job_id"] == "job-1"
+    assert values[":polly_task_id"] == "polly-task-1"
+
+
+def test_tts_worker_mapping_reuses_application_job_expiration(
+    monkeypatch: Any,
+) -> None:
+    _, table, _ = _run_worker(
+        monkeypatch, job=_worker_job(expires_at=987654321)
+    )
+
+    assert (
+        table.update_calls[1]["ExpressionAttributeValues"][":expires_at"]
+        == 987654321
+    )
+
+
+def test_tts_worker_mapping_contains_no_text_or_owner_sub(
+    monkeypatch: Any,
+) -> None:
+    _, table, _ = _run_worker(monkeypatch, job=_worker_job())
+
+    mapping = table.update_calls[1]
+    serialized_mapping = json.dumps(mapping)
+    assert "owner_sub" not in serialized_mapping
+    assert "Text to synthesize" not in serialized_mapping
+
+
 def test_tts_worker_ignores_completed_job(monkeypatch: Any) -> None:
     response, table, polly = _run_worker(
         monkeypatch, job=_worker_job(status="COMPLETED")
@@ -1330,6 +1423,45 @@ def test_tts_worker_ignores_completed_job(monkeypatch: Any) -> None:
     assert response == {"batchItemFailures": []}
     assert polly.calls == []
     assert table.update_calls == []
+
+
+def test_tts_worker_existing_task_id_repairs_mapping(monkeypatch: Any) -> None:
+    response, table, polly = _run_worker(
+        monkeypatch,
+        job=_worker_job(
+            status="PROCESSING",
+            polly_task_id="existing-task",
+            expires_at=555,
+        ),
+    )
+
+    assert response == {"batchItemFailures": []}
+    assert polly.calls == []
+    mapping = table.update_calls[0]
+    assert mapping["Key"] == {"job_id": "POLLY_TASK#existing-task"}
+    assert (
+        mapping["ExpressionAttributeValues"][":application_job_id"] == "job-1"
+    )
+    assert mapping["ExpressionAttributeValues"][":expires_at"] == 555
+
+
+def test_tts_worker_mapping_failure_retries_without_duplicate_task(
+    monkeypatch: Any,
+) -> None:
+    table = FakeWorkerTable(
+        {"job-1": _worker_job()},
+        mapping_error=_client_error("InternalServerError"),
+    )
+    response, _, polly = _run_worker(monkeypatch, table=table)
+
+    assert response == {
+        "batchItemFailures": [{"itemIdentifier": "tts-message-1"}]
+    }
+    assert len(polly.calls) == 1
+    assert table.update_calls[0]["Key"] == {"job_id": "job-1"}
+    assert table.update_calls[1]["Key"] == {
+        "job_id": "POLLY_TASK#polly-task-1"
+    }
 
 
 def test_tts_worker_existing_task_id_prevents_duplicate_polly_call(
@@ -1341,7 +1473,9 @@ def test_tts_worker_existing_task_id_prevents_duplicate_polly_call(
 
     assert response == {"batchItemFailures": []}
     assert polly.calls == []
-    assert table.update_calls == []
+    assert table.update_calls[0]["Key"] == {
+        "job_id": "POLLY_TASK#existing-task"
+    }
 
 
 def test_tts_worker_missing_job_is_acknowledged(monkeypatch: Any) -> None:
@@ -1457,6 +1591,511 @@ def test_stt_worker_acknowledges_sqs_batch() -> None:
     )
 
     assert response == {"batchItemFailures": []}
+
+
+class FakeCompletionTable:
+    def __init__(
+        self,
+        items: dict[str, dict[str, object]] | None = None,
+        *,
+        get_error: ClientError | None = None,
+        update_error: ClientError | None = None,
+    ) -> None:
+        self.items = items or {}
+        self.get_error = get_error
+        self.update_error = update_error
+        self.get_calls: list[dict[str, object]] = []
+        self.update_calls: list[dict[str, object]] = []
+
+    def get_item(self, **kwargs: Any) -> dict[str, object]:
+        self.get_calls.append(kwargs)
+        if self.get_error is not None:
+            raise self.get_error
+        item = self.items.get(kwargs["Key"]["job_id"])
+        return {} if item is None else {"Item": item}
+
+    def update_item(self, **kwargs: object) -> None:
+        self.update_calls.append(kwargs)
+        if self.update_error is not None:
+            raise self.update_error
+
+
+class FakeCompletionPolly:
+    def __init__(
+        self,
+        *,
+        task: dict[str, object] | None = None,
+        error: ClientError | None = None,
+    ) -> None:
+        self.task = task or {
+            "TaskId": "polly-task-1",
+            "TaskStatus": "completed",
+            "OutputUri": (
+                "https://s3.us-east-1.amazonaws.com/unit-test-media/"
+                "output/tts/jobs/job-1/audio.task.mp3"
+            ),
+            "OutputFormat": "mp3",
+        }
+        self.error = error
+        self.calls: list[dict[str, object]] = []
+
+    def get_speech_synthesis_task(self, **kwargs: object) -> dict[str, object]:
+        self.calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
+        return {"SynthesisTask": self.task}
+
+
+def _completion_job(**overrides: object) -> dict[str, object]:
+    job: dict[str, object] = {
+        "job_id": "job-1",
+        "owner_sub": "authenticated-user",
+        "type": "TTS",
+        "status": "PROCESSING",
+        "polly_task_id": "polly-task-1",
+        "voice": "Joanna",
+        "engine": "neural",
+        "output_format": "mp3",
+        "created_at": 100,
+        "updated_at": 100,
+        "expires_at": 200,
+    }
+    job.update(overrides)
+    return job
+
+
+def _completion_mapping(**overrides: object) -> dict[str, object]:
+    mapping: dict[str, object] = {
+        "job_id": "POLLY_TASK#polly-task-1",
+        "record_type": "POLLY_TASK_MAPPING",
+        "application_job_id": "job-1",
+        "polly_task_id": "polly-task-1",
+        "created_at": 100,
+        "updated_at": 100,
+        "expires_at": 200,
+    }
+    mapping.update(overrides)
+    return mapping
+
+
+def _sns_record(
+    message: object | None = None,
+    *,
+    raw_message: str | None = None,
+) -> dict[str, object]:
+    payload = (
+        {"taskId": "polly-task-1", "taskStatus": "completed"}
+        if message is None
+        else message
+    )
+    return {
+        "EventSource": "aws:sns",
+        "Sns": {
+            "MessageId": "sns-message-1",
+            "Message": json.dumps(payload) if raw_message is None else raw_message,
+        },
+    }
+
+
+def _configure_completion(
+    monkeypatch: Any,
+    module: ModuleType,
+    table: FakeCompletionTable,
+    polly: FakeCompletionPolly,
+) -> None:
+    monkeypatch.setattr(module, "_create_jobs_table", lambda: table)
+    monkeypatch.setattr(module, "_create_polly_client", lambda: polly)
+    monkeypatch.setenv("CONVERSION_JOBS_TABLE_NAME", "unit-test-jobs")
+    monkeypatch.setenv("MEDIA_BUCKET_NAME", "unit-test-media")
+
+
+def _run_completion(
+    monkeypatch: Any,
+    *,
+    job: dict[str, object] | None = None,
+    mapping: dict[str, object] | None = None,
+    table: FakeCompletionTable | None = None,
+    polly: FakeCompletionPolly | None = None,
+    record: dict[str, object] | None = None,
+) -> tuple[dict[str, int], FakeCompletionTable, FakeCompletionPolly]:
+    module = _load_handler("completion")
+    items: dict[str, dict[str, object]] = {}
+    if mapping is not None:
+        items[str(mapping["job_id"])] = mapping
+    if job is not None:
+        items[str(job["job_id"])] = job
+    fake_table = table or FakeCompletionTable(items)
+    fake_polly = polly or FakeCompletionPolly()
+    _configure_completion(monkeypatch, module, fake_table, fake_polly)
+    response = module.lambda_handler(
+        {"Records": [record or _sns_record()]}, LambdaContext()
+    )
+    return response, fake_table, fake_polly
+
+
+def test_completion_completed_task_updates_job_to_completed(
+    monkeypatch: Any,
+) -> None:
+    response, table, _ = _run_completion(
+        monkeypatch, job=_completion_job(), mapping=_completion_mapping()
+    )
+
+    assert response["completed"] == 1
+    assert (
+        table.update_calls[0]["ExpressionAttributeValues"][":completed"]
+        == "COMPLETED"
+    )
+
+
+def test_completion_calls_polly_with_notification_task_id(
+    monkeypatch: Any,
+) -> None:
+    _, _, polly = _run_completion(
+        monkeypatch, job=_completion_job(), mapping=_completion_mapping()
+    )
+
+    assert polly.calls == [{"TaskId": "polly-task-1"}]
+
+
+def test_completion_retrieves_mapping_item_first(monkeypatch: Any) -> None:
+    _, table, _ = _run_completion(
+        monkeypatch, job=_completion_job(), mapping=_completion_mapping()
+    )
+
+    assert table.get_calls[0] == {
+        "Key": {"job_id": "POLLY_TASK#polly-task-1"}
+    }
+
+
+def test_completion_retrieves_application_job_from_mapping(
+    monkeypatch: Any,
+) -> None:
+    _, table, _ = _run_completion(
+        monkeypatch, job=_completion_job(), mapping=_completion_mapping()
+    )
+
+    assert table.get_calls[1] == {"Key": {"job_id": "job-1"}}
+
+
+def test_completion_saves_output_uri_and_decoded_output_key(
+    monkeypatch: Any,
+) -> None:
+    polly = FakeCompletionPolly(
+        task={
+            "TaskId": "polly-task-1",
+            "TaskStatus": "completed",
+            "OutputUri": (
+                "https://s3.us-east-1.amazonaws.com/unit-test-media/"
+                "output/tts/jobs/job-1/audio%20file.mp3"
+            ),
+            "OutputFormat": "mp3",
+        }
+    )
+    _, table, _ = _run_completion(
+        monkeypatch,
+        job=_completion_job(),
+        mapping=_completion_mapping(),
+        polly=polly,
+    )
+
+    values = table.update_calls[0]["ExpressionAttributeValues"]
+    assert values[":output_uri"].endswith("audio%20file.mp3")
+    assert values[":output_key"] == "output/tts/jobs/job-1/audio file.mp3"
+
+
+def test_completion_sets_completed_and_updated_timestamps(
+    monkeypatch: Any,
+) -> None:
+    _, table, _ = _run_completion(
+        monkeypatch, job=_completion_job(), mapping=_completion_mapping()
+    )
+
+    values = table.update_calls[0]["ExpressionAttributeValues"]
+    assert isinstance(values[":completed_at"], int)
+    assert values[":updated_at"] == values[":completed_at"]
+
+
+def test_completion_removes_old_error_fields(monkeypatch: Any) -> None:
+    _, table, _ = _run_completion(
+        monkeypatch,
+        job=_completion_job(
+            error_code="OLD_ERROR", error_message="old safe message"
+        ),
+        mapping=_completion_mapping(),
+    )
+
+    assert (
+        "REMOVE error_code, error_message"
+        in table.update_calls[0]["UpdateExpression"]
+    )
+
+
+def test_completion_failed_task_updates_job_to_failed(monkeypatch: Any) -> None:
+    polly = FakeCompletionPolly(
+        task={
+            "TaskId": "polly-task-1",
+            "TaskStatus": "failed",
+            "TaskStatusReason": "raw service reason",
+        }
+    )
+    response, table, _ = _run_completion(
+        monkeypatch,
+        job=_completion_job(),
+        mapping=_completion_mapping(),
+        polly=polly,
+    )
+
+    assert response["failed"] == 1
+    values = table.update_calls[0]["ExpressionAttributeValues"]
+    assert values[":failed"] == "FAILED"
+    assert values[":error_code"] == "POLLY_TASK_FAILED"
+
+
+def test_completion_failed_task_stores_only_generic_error(
+    monkeypatch: Any,
+) -> None:
+    raw_reason = "raw reason containing internal details"
+    polly = FakeCompletionPolly(
+        task={
+            "TaskId": "polly-task-1",
+            "TaskStatus": "failed",
+            "TaskStatusReason": raw_reason,
+        }
+    )
+    _, table, _ = _run_completion(
+        monkeypatch,
+        job=_completion_job(),
+        mapping=_completion_mapping(),
+        polly=polly,
+    )
+
+    message = table.update_calls[0]["ExpressionAttributeValues"][":error_message"]
+    assert message == "Amazon Polly could not complete the speech synthesis task."
+    assert raw_reason not in message
+
+
+def test_completion_scheduled_task_remains_processing(monkeypatch: Any) -> None:
+    polly = FakeCompletionPolly(
+        task={"TaskId": "polly-task-1", "TaskStatus": "scheduled"}
+    )
+    response, table, _ = _run_completion(
+        monkeypatch,
+        job=_completion_job(),
+        mapping=_completion_mapping(),
+        polly=polly,
+    )
+
+    assert response["processing"] == 1
+    values = table.update_calls[0]["ExpressionAttributeValues"]
+    assert values[":processing"] == "PROCESSING"
+    assert ":completed_at" not in values
+
+
+def test_completion_in_progress_task_remains_processing(
+    monkeypatch: Any,
+) -> None:
+    polly = FakeCompletionPolly(
+        task={"TaskId": "polly-task-1", "TaskStatus": "inProgress"}
+    )
+    response, table, _ = _run_completion(
+        monkeypatch,
+        job=_completion_job(),
+        mapping=_completion_mapping(),
+        polly=polly,
+    )
+
+    assert response["processing"] == 1
+    assert (
+        table.update_calls[0]["ExpressionAttributeValues"][":polly_task_status"]
+        == "inProgress"
+    )
+
+
+def test_completion_already_completed_job_is_idempotently_ignored(
+    monkeypatch: Any,
+) -> None:
+    response, table, _ = _run_completion(
+        monkeypatch,
+        job=_completion_job(
+            status="COMPLETED",
+            output_key="output/tts/jobs/job-1/audio.task.mp3",
+            completed_at=150,
+        ),
+        mapping=_completion_mapping(),
+    )
+
+    assert response["ignored"] == 1
+    assert table.update_calls == []
+
+
+def test_completion_already_failed_job_is_idempotently_ignored(
+    monkeypatch: Any,
+) -> None:
+    polly = FakeCompletionPolly(
+        task={"TaskId": "polly-task-1", "TaskStatus": "failed"}
+    )
+    response, table, _ = _run_completion(
+        monkeypatch,
+        job=_completion_job(
+            status="FAILED",
+            error_code="POLLY_TASK_FAILED",
+            completed_at=150,
+        ),
+        mapping=_completion_mapping(),
+        polly=polly,
+    )
+
+    assert response["ignored"] == 1
+    assert table.update_calls == []
+
+
+def test_completion_malformed_sns_json_is_ignored(monkeypatch: Any) -> None:
+    response, table, polly = _run_completion(
+        monkeypatch, record=_sns_record(raw_message="{")
+    )
+
+    assert response == {
+        "processed": 1,
+        "completed": 0,
+        "failed": 0,
+        "processing": 0,
+        "ignored": 1,
+    }
+    assert table.get_calls == []
+    assert polly.calls == []
+
+
+def test_completion_missing_task_id_is_ignored(monkeypatch: Any) -> None:
+    response, _, polly = _run_completion(
+        monkeypatch, record=_sns_record({"taskStatus": "completed"})
+    )
+
+    assert response["ignored"] == 1
+    assert polly.calls == []
+
+
+def test_completion_missing_mapping_raises_for_retry(monkeypatch: Any) -> None:
+    module = _load_handler("completion")
+    table = FakeCompletionTable()
+    polly = FakeCompletionPolly()
+    _configure_completion(monkeypatch, module, table, polly)
+
+    with pytest.raises(module.RetryableCompletionError):
+        module.lambda_handler(
+            {"Records": [_sns_record()]}, LambdaContext()
+        )
+
+
+def test_completion_missing_application_job_is_ignored(
+    monkeypatch: Any,
+) -> None:
+    response, table, _ = _run_completion(
+        monkeypatch, mapping=_completion_mapping()
+    )
+
+    assert response["ignored"] == 1
+    assert table.update_calls == []
+
+
+def test_completion_wrong_application_job_type_is_ignored(
+    monkeypatch: Any,
+) -> None:
+    response, table, _ = _run_completion(
+        monkeypatch,
+        job=_completion_job(type="STT"),
+        mapping=_completion_mapping(),
+    )
+
+    assert response["ignored"] == 1
+    assert table.update_calls == []
+
+
+def test_completion_polly_task_id_mismatch_does_not_modify_job(
+    monkeypatch: Any,
+) -> None:
+    response, table, _ = _run_completion(
+        monkeypatch,
+        job=_completion_job(polly_task_id="different-task"),
+        mapping=_completion_mapping(),
+    )
+
+    assert response["ignored"] == 1
+    assert table.update_calls == []
+
+
+def test_completion_completed_task_without_output_uri_retries(
+    monkeypatch: Any,
+) -> None:
+    module = _load_handler("completion")
+    table = FakeCompletionTable(
+        {
+            "POLLY_TASK#polly-task-1": _completion_mapping(),
+            "job-1": _completion_job(),
+        }
+    )
+    polly = FakeCompletionPolly(
+        task={"TaskId": "polly-task-1", "TaskStatus": "completed"}
+    )
+    _configure_completion(monkeypatch, module, table, polly)
+
+    with pytest.raises(module.RetryableCompletionError):
+        module.lambda_handler({"Records": [_sns_record()]}, LambdaContext())
+    assert table.update_calls == []
+
+
+def test_completion_rejects_output_uri_outside_job_prefix(
+    monkeypatch: Any,
+) -> None:
+    module = _load_handler("completion")
+    table = FakeCompletionTable(
+        {
+            "POLLY_TASK#polly-task-1": _completion_mapping(),
+            "job-1": _completion_job(),
+        }
+    )
+    polly = FakeCompletionPolly(
+        task={
+            "TaskId": "polly-task-1",
+            "TaskStatus": "completed",
+            "OutputUri": (
+                "https://s3.us-east-1.amazonaws.com/unit-test-media/"
+                "output/tts/jobs/another-job/audio.mp3"
+            ),
+        }
+    )
+    _configure_completion(monkeypatch, module, table, polly)
+
+    with pytest.raises(module.RetryableCompletionError):
+        module.lambda_handler({"Records": [_sns_record()]}, LambdaContext())
+    assert table.update_calls == []
+
+
+def test_completion_polly_client_error_is_raised_for_retry(
+    monkeypatch: Any,
+) -> None:
+    module = _load_handler("completion")
+    table = FakeCompletionTable()
+    polly = FakeCompletionPolly(
+        error=_client_error("SynthesisTaskNotFoundException")
+    )
+    _configure_completion(monkeypatch, module, table, polly)
+
+    with pytest.raises(ClientError):
+        module.lambda_handler({"Records": [_sns_record()]}, LambdaContext())
+
+
+def test_completion_dynamodb_client_error_is_raised_for_retry(
+    monkeypatch: Any,
+) -> None:
+    module = _load_handler("completion")
+    table = FakeCompletionTable(
+        get_error=_client_error("InternalServerError")
+    )
+    polly = FakeCompletionPolly()
+    _configure_completion(monkeypatch, module, table, polly)
+
+    with pytest.raises(ClientError):
+        module.lambda_handler({"Records": [_sns_record()]}, LambdaContext())
 
 
 def test_completion_accepts_eventbridge_event() -> None:

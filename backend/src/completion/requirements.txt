@@ -1,1 +1,1 @@
-# The initial completion placeholder uses only the Python standard library.
+boto3>=1.40,<2
