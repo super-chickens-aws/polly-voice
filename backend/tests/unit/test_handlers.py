@@ -2002,14 +2002,357 @@ def test_tts_worker_mixed_batch_reports_only_failed_message_ids(
     assert len(polly.calls) == 2
 
 
-def test_stt_worker_acknowledges_sqs_batch() -> None:
+class FakeSttWorkerTable:
+    def __init__(
+        self,
+        jobs: dict[str, dict[str, object]] | None = None,
+        *,
+        get_error: ClientError | None = None,
+        update_error: ClientError | None = None,
+    ) -> None:
+        self.jobs = jobs or {}
+        self.get_error = get_error
+        self.update_error = update_error
+        self.get_calls: list[dict[str, object]] = []
+        self.update_calls: list[dict[str, object]] = []
+
+    def get_item(self, **kwargs: Any) -> dict[str, object]:
+        self.get_calls.append(kwargs)
+        if self.get_error is not None:
+            raise self.get_error
+        item = self.jobs.get(kwargs["Key"]["job_id"])
+        return {} if item is None else {"Item": item}
+
+    def update_item(self, **kwargs: object) -> None:
+        self.update_calls.append(kwargs)
+        if self.update_error is not None:
+            raise self.update_error
+
+
+class FakeTranscribe:
+    def __init__(
+        self,
+        *,
+        error: ClientError | None = None,
+        status: str = "IN_PROGRESS",
+    ) -> None:
+        self.error = error
+        self.status = status
+        self.calls: list[dict[str, object]] = []
+
+    def start_transcription_job(self, **kwargs: object) -> dict[str, object]:
+        self.calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
+        return {
+            "TranscriptionJob": {
+                "TranscriptionJobName": kwargs["TranscriptionJobName"],
+                "TranscriptionJobStatus": self.status,
+            }
+        }
+
+
+def _stt_worker_job(**overrides: object) -> dict[str, object]:
+    job: dict[str, object] = {
+        "job_id": "stt-job-1",
+        "owner_sub": "authenticated-user",
+        "type": "STT",
+        "status": "AWAITING_UPLOAD",
+        "media_format": "mp3",
+        "language_code": "vi-VN",
+        "input_key": "input/stt/jobs/stt-job-1/source.mp3",
+    }
+    job.update(overrides)
+    return job
+
+
+def _stt_worker_record(
+    message_id: str = "stt-message-1",
+    *,
+    bucket: str = "unit-test-media",
+    key: str = "input/stt/jobs/stt-job-1/source.mp3",
+) -> dict[str, str]:
+    event = {
+        "version": "0",
+        "source": "aws.s3",
+        "detail-type": "Object Created",
+        "detail": {
+            "bucket": {"name": bucket},
+            "object": {"key": key, "size": 12345},
+        },
+    }
+    return {"messageId": message_id, "body": json.dumps(event)}
+
+
+def _configure_stt_worker(
+    monkeypatch: Any,
+    module: ModuleType,
+    table: FakeSttWorkerTable,
+    transcribe: FakeTranscribe,
+) -> None:
+    monkeypatch.setattr(module, "_create_jobs_table", lambda: table)
+    monkeypatch.setattr(module, "_create_transcribe_client", lambda: transcribe)
+    monkeypatch.setenv("CONVERSION_JOBS_TABLE_NAME", "unit-test-jobs")
+    monkeypatch.setenv("MEDIA_BUCKET_NAME", "unit-test-media")
+
+
+def _run_stt_worker(
+    monkeypatch: Any,
+    *,
+    job: dict[str, object] | None = None,
+    table: FakeSttWorkerTable | None = None,
+    transcribe: FakeTranscribe | None = None,
+    record: dict[str, str] | None = None,
+) -> tuple[dict[str, object], FakeSttWorkerTable, FakeTranscribe]:
     module = _load_handler("stt_worker")
+    fake_table = table or FakeSttWorkerTable(
+        {} if job is None else {str(job["job_id"]): job}
+    )
+    fake_transcribe = transcribe or FakeTranscribe()
+    _configure_stt_worker(monkeypatch, module, fake_table, fake_transcribe)
     response = module.lambda_handler(
-        {"Records": [{"messageId": "stt-message"}]},
-        LambdaContext(),
+        {"Records": [record or _stt_worker_record()]}, LambdaContext()
+    )
+    return response, fake_table, fake_transcribe
+
+
+def test_stt_worker_starts_transcribe_with_expected_parameters(
+    monkeypatch: Any,
+) -> None:
+    encoded_record = _stt_worker_record(
+        key="input%2Fstt%2Fjobs%2Fstt-job-1%2Fsource.mp3"
+    )
+    response, table, transcribe = _run_stt_worker(
+        monkeypatch, job=_stt_worker_job(), record=encoded_record
     )
 
     assert response == {"batchItemFailures": []}
+    assert len(transcribe.calls) == 1
+    assert transcribe.calls[0] == {
+        "TranscriptionJobName": "stt-job-1",
+        "LanguageCode": "vi-VN",
+        "MediaFormat": "mp3",
+        "Media": {
+            "MediaFileUri": (
+                "s3://unit-test-media/input/stt/jobs/stt-job-1/source.mp3"
+            )
+        },
+        "OutputBucketName": "unit-test-media",
+        "OutputKey": "output/stt/jobs/stt-job-1/transcript.json",
+    }
+    update = table.update_calls[0]
+    values = update["ExpressionAttributeValues"]
+    assert values[":processing"] == "PROCESSING"
+    assert values[":transcribe_job_name"] == "stt-job-1"
+    assert values[":transcribe_job_status"] == "IN_PROGRESS"
+    assert values[":output_key"] == "output/stt/jobs/stt-job-1/transcript.json"
+    assert "REMOVE error_code, error_message" in update["UpdateExpression"]
+    assert ":completed_at" not in values
+
+
+@pytest.mark.parametrize(
+    "job",
+    [
+        _stt_worker_job(status="COMPLETED"),
+        _stt_worker_job(transcribe_job_name="stt-job-1"),
+    ],
+)
+def test_stt_worker_idempotent_jobs_do_not_start_again(
+    monkeypatch: Any, job: dict[str, object]
+) -> None:
+    response, table, transcribe = _run_stt_worker(monkeypatch, job=job)
+
+    assert response == {"batchItemFailures": []}
+    assert transcribe.calls == []
+    assert table.update_calls == []
+
+
+def test_stt_worker_missing_job_is_acknowledged(monkeypatch: Any) -> None:
+    response, _, transcribe = _run_stt_worker(monkeypatch)
+
+    assert response == {"batchItemFailures": []}
+    assert transcribe.calls == []
+
+
+def test_stt_worker_wrong_job_type_is_acknowledged(monkeypatch: Any) -> None:
+    response, table, transcribe = _run_stt_worker(
+        monkeypatch, job=_stt_worker_job(type="TTS")
+    )
+
+    assert response == {"batchItemFailures": []}
+    assert transcribe.calls == []
+    assert table.update_calls == []
+
+
+@pytest.mark.parametrize(
+    "job",
+    [
+        _stt_worker_job(input_key="input/stt/jobs/other/source.mp3"),
+        _stt_worker_job(media_format="wav"),
+    ],
+)
+def test_stt_worker_stored_input_mismatch_is_acknowledged(
+    monkeypatch: Any, job: dict[str, object]
+) -> None:
+    response, table, transcribe = _run_stt_worker(monkeypatch, job=job)
+
+    assert response == {"batchItemFailures": []}
+    assert transcribe.calls == []
+    assert table.update_calls == []
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        _stt_worker_record(bucket="another-bucket"),
+        _stt_worker_record(key="uploads/random.mp3"),
+    ],
+)
+def test_stt_worker_irrelevant_s3_objects_are_ignored(
+    monkeypatch: Any, record: dict[str, str]
+) -> None:
+    response, table, transcribe = _run_stt_worker(
+        monkeypatch, job=_stt_worker_job(), record=record
+    )
+
+    assert response == {"batchItemFailures": []}
+    assert table.get_calls == []
+    assert transcribe.calls == []
+
+
+@pytest.mark.parametrize(
+    ("record", "message_id"),
+    [
+        ({"messageId": "bad-json", "body": "{"}, "bad-json"),
+        (
+            {
+                "messageId": "missing-detail",
+                "body": json.dumps(
+                    {
+                        "source": "aws.s3",
+                        "detail-type": "Object Created",
+                    }
+                ),
+            },
+            "missing-detail",
+        ),
+    ],
+)
+def test_stt_worker_malformed_messages_are_failed(
+    monkeypatch: Any, record: dict[str, str], message_id: str
+) -> None:
+    response, _, transcribe = _run_stt_worker(
+        monkeypatch, record=record
+    )
+
+    assert response == {
+        "batchItemFailures": [{"itemIdentifier": message_id}]
+    }
+    assert transcribe.calls == []
+
+
+def test_stt_worker_bad_request_marks_failed_without_retry(
+    monkeypatch: Any,
+) -> None:
+    transcribe = FakeTranscribe(error=_client_error("BadRequestException"))
+    response, table, _ = _run_stt_worker(
+        monkeypatch, job=_stt_worker_job(), transcribe=transcribe
+    )
+
+    assert response == {"batchItemFailures": []}
+    values = table.update_calls[0]["ExpressionAttributeValues"]
+    assert values[":failed"] == "FAILED"
+    assert values[":error_code"] == "TRANSCRIBE_VALIDATION_ERROR"
+    assert values[":error_message"] == (
+        "Amazon Transcribe could not accept the submitted audio job."
+    )
+
+
+def test_stt_worker_conflict_repairs_processing_state(monkeypatch: Any) -> None:
+    transcribe = FakeTranscribe(error=_client_error("ConflictException"))
+    response, table, _ = _run_stt_worker(
+        monkeypatch, job=_stt_worker_job(), transcribe=transcribe
+    )
+
+    assert response == {"batchItemFailures": []}
+    values = table.update_calls[0]["ExpressionAttributeValues"]
+    assert values[":processing"] == "PROCESSING"
+    assert values[":transcribe_job_name"] == "stt-job-1"
+    assert values[":output_key"] == "output/stt/jobs/stt-job-1/transcript.json"
+    assert ":failed" not in values
+
+
+def test_stt_worker_transient_transcribe_error_retries(
+    monkeypatch: Any,
+) -> None:
+    transcribe = FakeTranscribe(error=_client_error("InternalFailureException"))
+    response, table, _ = _run_stt_worker(
+        monkeypatch, job=_stt_worker_job(), transcribe=transcribe
+    )
+
+    assert response == {
+        "batchItemFailures": [{"itemIdentifier": "stt-message-1"}]
+    }
+    assert table.update_calls[0]["ExpressionAttributeValues"][":failed"] == "FAILED"
+
+
+def test_stt_worker_dynamodb_get_error_retries(monkeypatch: Any) -> None:
+    table = FakeSttWorkerTable(
+        get_error=_client_error("InternalServerError")
+    )
+    response, _, transcribe = _run_stt_worker(monkeypatch, table=table)
+
+    assert response == {
+        "batchItemFailures": [{"itemIdentifier": "stt-message-1"}]
+    }
+    assert transcribe.calls == []
+
+
+def test_stt_worker_dynamodb_update_error_retries(monkeypatch: Any) -> None:
+    table = FakeSttWorkerTable(
+        {"stt-job-1": _stt_worker_job()},
+        update_error=_client_error("InternalServerError"),
+    )
+    response, _, transcribe = _run_stt_worker(
+        monkeypatch, table=table
+    )
+
+    assert response == {
+        "batchItemFailures": [{"itemIdentifier": "stt-message-1"}]
+    }
+    assert len(transcribe.calls) == 1
+
+
+def test_stt_worker_mixed_batch_reports_only_failed_ids(
+    monkeypatch: Any,
+) -> None:
+    module = _load_handler("stt_worker")
+    table = FakeSttWorkerTable(
+        {
+            "stt-job-1": _stt_worker_job(),
+            "stt-job-2": _stt_worker_job(
+                job_id="stt-job-2",
+                input_key="input/stt/jobs/stt-job-2/source.mp3",
+            ),
+        }
+    )
+    transcribe = FakeTranscribe()
+    _configure_stt_worker(monkeypatch, module, table, transcribe)
+    records = [
+        _stt_worker_record("success-1"),
+        {"messageId": "bad-json", "body": "{"},
+        _stt_worker_record("ignored", bucket="another-bucket"),
+        _stt_worker_record(
+            "success-2", key="input/stt/jobs/stt-job-2/source.mp3"
+        ),
+    ]
+
+    response = module.lambda_handler({"Records": records}, LambdaContext())
+
+    assert response == {
+        "batchItemFailures": [{"itemIdentifier": "bad-json"}]
+    }
+    assert len(transcribe.calls) == 2
 
 
 class FakeCompletionTable:
