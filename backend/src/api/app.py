@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 import boto3
@@ -34,10 +35,28 @@ POLLY_VALIDATION_ERROR_CODES = {
     "TextLengthExceededException",
     "ValidationException",
 }
+PROFILE_FIELDS = (
+    "cognito_sub",
+    "display_name",
+    "preferred_language",
+    "created_at",
+    "updated_at",
+)
+PROFILE_REQUEST_FIELDS = {"display_name", "preferred_language"}
+ALLOWED_PREFERRED_LANGUAGES = {"vi-VN", "en-US"}
 
 
 class PreviewValidationError(ValueError):
     """An invalid client request for a TTS preview."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+class ProfileValidationError(ValueError):
+    """An invalid client request for a user profile."""
 
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
@@ -80,6 +99,11 @@ def _create_polly_client() -> Any:
 def _create_s3_client() -> Any:
     """Create S3 lazily so unit tests can replace this factory."""
     return boto3.client("s3")
+
+
+def _create_users_table() -> Any:
+    """Create the DynamoDB Table lazily so unit tests can replace this factory."""
+    return boto3.resource("dynamodb").Table(os.environ["USERS_TABLE_NAME"])
 
 
 def _parse_preview_request(event: dict[str, Any]) -> dict[str, str]:
@@ -136,6 +160,172 @@ def _parse_preview_request(event: dict[str, Any]) -> dict[str, str]:
 
 def _client_error_code(error: ClientError) -> str:
     return str(error.response.get("Error", {}).get("Code", "ClientError"))
+
+
+def _authenticated_sub(event: dict[str, Any]) -> str | None:
+    request_context = event.get("requestContext")
+    if not isinstance(request_context, dict):
+        return None
+    authorizer = request_context.get("authorizer")
+    if not isinstance(authorizer, dict):
+        return None
+    claims = authorizer.get("claims")
+    if not isinstance(claims, dict):
+        return None
+    cognito_sub = claims.get("sub")
+    if not isinstance(cognito_sub, str) or not cognito_sub:
+        return None
+    return cognito_sub
+
+
+def _parse_profile_request(event: dict[str, Any]) -> dict[str, str]:
+    body = event.get("body")
+    if not isinstance(body, str):
+        raise ProfileValidationError("INVALID_JSON", "Request body must be valid JSON.")
+
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError as error:
+        raise ProfileValidationError(
+            "INVALID_JSON", "Request body must be valid JSON."
+        ) from error
+
+    if not isinstance(payload, dict):
+        raise ProfileValidationError(
+            "INVALID_JSON", "Request body must be a JSON object."
+        )
+
+    unknown_fields = set(payload) - PROFILE_REQUEST_FIELDS
+    if unknown_fields:
+        raise ProfileValidationError(
+            "UNKNOWN_FIELDS", "Request body contains unsupported fields."
+        )
+
+    if "display_name" not in payload:
+        raise ProfileValidationError(
+            "MISSING_DISPLAY_NAME", "display_name is required."
+        )
+    display_name = payload["display_name"]
+    if not isinstance(display_name, str):
+        raise ProfileValidationError(
+            "INVALID_DISPLAY_NAME", "display_name must be a string."
+        )
+    display_name = display_name.strip()
+    if not 1 <= len(display_name) <= 80:
+        raise ProfileValidationError(
+            "INVALID_DISPLAY_NAME",
+            "display_name must contain between 1 and 80 characters.",
+        )
+
+    if "preferred_language" not in payload:
+        raise ProfileValidationError(
+            "MISSING_PREFERRED_LANGUAGE", "preferred_language is required."
+        )
+    preferred_language = payload["preferred_language"]
+    if (
+        not isinstance(preferred_language, str)
+        or preferred_language not in ALLOWED_PREFERRED_LANGUAGES
+    ):
+        raise ProfileValidationError(
+            "INVALID_PREFERRED_LANGUAGE",
+            "preferred_language must be either vi-VN or en-US.",
+        )
+
+    return {
+        "display_name": display_name,
+        "preferred_language": preferred_language,
+    }
+
+
+def _profile_body(item: dict[str, Any]) -> dict[str, Any]:
+    return {"profile": {field: item.get(field) for field in PROFILE_FIELDS}}
+
+
+def _handle_get_profile(cognito_sub: str, request_id: str | None) -> dict[str, Any]:
+    try:
+        result = _create_users_table().get_item(
+            Key={"cognito_sub": cognito_sub},
+        )
+    except ClientError as error:
+        LOGGER.exception(
+            "profile_database_error",
+            extra={"request_id": request_id, "error_code": _client_error_code(error)},
+        )
+        return _error_response(
+            502, "DATABASE_ERROR", "Unable to access the user profile.", request_id
+        )
+    except Exception:
+        LOGGER.exception("profile_unexpected_error", extra={"request_id": request_id})
+        return _error_response(
+            500, "INTERNAL_ERROR", "An internal error occurred.", request_id
+        )
+
+    item = result.get("Item")
+    if not isinstance(item, dict):
+        return _error_response(
+            404,
+            "PROFILE_NOT_FOUND",
+            "The user profile does not exist.",
+            request_id,
+        )
+    return _response(200, _profile_body(item))
+
+
+def _handle_put_profile(
+    event: dict[str, Any], cognito_sub: str, request_id: str | None
+) -> dict[str, Any]:
+    try:
+        profile = _parse_profile_request(event)
+    except ProfileValidationError as error:
+        return _error_response(400, error.code, error.message, request_id)
+
+    timestamp = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    try:
+        result = _create_users_table().update_item(
+            Key={"cognito_sub": cognito_sub},
+            UpdateExpression=(
+                "SET #display_name = :display_name, "
+                "#preferred_language = :preferred_language, "
+                "#updated_at = :updated_at, "
+                "#created_at = if_not_exists(#created_at, :created_at)"
+            ),
+            ExpressionAttributeNames={
+                "#display_name": "display_name",
+                "#preferred_language": "preferred_language",
+                "#updated_at": "updated_at",
+                "#created_at": "created_at",
+            },
+            ExpressionAttributeValues={
+                ":display_name": profile["display_name"],
+                ":preferred_language": profile["preferred_language"],
+                ":updated_at": timestamp,
+                ":created_at": timestamp,
+            },
+            ReturnValues="ALL_NEW",
+        )
+    except ClientError as error:
+        LOGGER.exception(
+            "profile_database_error",
+            extra={"request_id": request_id, "error_code": _client_error_code(error)},
+        )
+        return _error_response(
+            502, "DATABASE_ERROR", "Unable to update the user profile.", request_id
+        )
+    except Exception:
+        LOGGER.exception("profile_unexpected_error", extra={"request_id": request_id})
+        return _error_response(
+            500, "INTERNAL_ERROR", "An internal error occurred.", request_id
+        )
+
+    attributes = result.get("Attributes")
+    if not isinstance(attributes, dict):
+        LOGGER.error(
+            "profile_update_missing_attributes", extra={"request_id": request_id}
+        )
+        return _error_response(
+            500, "INTERNAL_ERROR", "An internal error occurred.", request_id
+        )
+    return _response(200, _profile_body(attributes))
 
 
 def _handle_preview(event: dict[str, Any], request_id: str | None) -> dict[str, Any]:
@@ -228,6 +418,19 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
     if method == "POST" and path == "/tts/preview":
         return _handle_preview(event, request_id)
+
+    if path == "/profile" and method in {"GET", "PUT"}:
+        cognito_sub = _authenticated_sub(event)
+        if cognito_sub is None:
+            return _error_response(
+                401,
+                "UNAUTHORIZED",
+                "A valid authenticated user is required.",
+                request_id,
+            )
+        if method == "GET":
+            return _handle_get_profile(cognito_sub, request_id)
+        return _handle_put_profile(event, cognito_sub, request_id)
 
     LOGGER.info(
         "api_route_not_implemented",
