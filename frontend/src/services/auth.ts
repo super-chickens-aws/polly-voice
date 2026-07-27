@@ -12,6 +12,7 @@ import {
  * Đăng ký
  */
 export async function register(
+  displayName: string,
   email: string,
   password: string
 ) {
@@ -21,8 +22,9 @@ export async function register(
     options: {
       userAttributes: {
         email,
+        name: displayName
       },
-    },
+    }, 
   });
 }
 

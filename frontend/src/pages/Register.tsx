@@ -8,6 +8,7 @@ import {
 
 export default function Register() {
 
+  const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
@@ -15,7 +16,11 @@ export default function Register() {
 
   async function handleRegister() {
     try {
-      await register(email, password);
+      await register(
+    displayName,
+    email,
+    password
+);
       alert("Đã gửi mã xác thực tới email.");
       setVerify(true);
     } catch (err) {
@@ -53,6 +58,14 @@ export default function Register() {
   return (
     <div>
       <h2>Register</h2>
+      <input
+        placeholder="Display Name"
+        value={displayName}
+        onChange={(e)=>setDisplayName(e.target.value)}
+      />
+
+      <br /><br />
+      
       <input
         placeholder="Email"
         value={email}

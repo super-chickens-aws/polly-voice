@@ -161,13 +161,14 @@ export const handler = async (event) => {
     const claims = event.requestContext.authorizer.jwt.claims;
     const userId = claims.sub;
     const email = claims.email;
+    const displayName = claims.name;
     let user = await getUser(userId);
 
     if (!user) {
         user = {
             userId,
             email,
-            displayName: "",
+            displayName,
             avatar: "",
             role: "USER",
             createdAt: new Date().toISOString()
