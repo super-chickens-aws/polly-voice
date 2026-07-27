@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
 import { useAuth } from './auth/useAuth'
 import { AuthModal } from './components/auth/AuthModal'
@@ -7,72 +7,14 @@ import { HistoryPanel } from './features/history/HistoryPanel'
 import { ProfilePanel } from './features/profile/ProfilePanel'
 import { SttPanel } from './features/stt/SttPanel'
 import { TtsPanel } from './features/tts/TtsPanel'
+import { useTtsPreview } from './features/tts/useTtsPreview'
+import type { PreviewEngine } from './features/tts/ttsPreviewTypes'
 import type {
-  EngineType,
   HistoryTab,
-  PresetItem,
   STTHistoryItem,
   TTSHistoryItem,
   TabType,
 } from './types/app'
-
-const PRESETS: PresetItem[] = [
-  {
-    id: 'none',
-    name: 'Custom (No Preset)',
-    desc: 'Tự điều chỉnh các thông số',
-  },
-  {
-    id: 'deep_male',
-    name: 'Deep Male',
-    voice: 'Matthew',
-    engine: 'neural',
-    desc: 'Giọng nam trầm, uy quyền',
-  },
-  {
-    id: 'young_male',
-    name: 'Young Male',
-    voice: 'Kevin',
-    engine: 'neural',
-    desc: 'Giọng nam trẻ, năng động',
-  },
-  {
-    id: 'soft_female',
-    name: 'Soft Female',
-    voice: 'Joanna',
-    engine: 'neural',
-    desc: 'Giọng nữ nhẹ nhàng',
-  },
-  {
-    id: 'expressive_female',
-    name: 'Expressive Female',
-    voice: 'Danielle',
-    engine: 'long-form',
-    desc: 'Giọng nữ biểu cảm, đọc truyện',
-  },
-  {
-    id: 'mc',
-    name: 'MC',
-    voice: 'Stephen',
-    engine: 'neural',
-    desc: 'Giọng MC rõ ràng, dẫn chương trình',
-  },
-  {
-    id: 'podcast',
-    name: 'Podcast',
-    voice: 'Matthew',
-    engine: 'neural',
-    domain: 'conversational',
-    desc: 'Giọng Podcast tự nhiên',
-  },
-  {
-    id: 'audiobook',
-    name: 'Audiobook',
-    voice: 'Joanna',
-    engine: 'long-form',
-    desc: 'Giọng đọc sách nhịp chậm',
-  },
-]
 
 const VOICES = [
   'Joanna',
@@ -90,19 +32,18 @@ function App() {
   const [activeTab, setActiveTab] = useState<TabType>('tts')
   const [showAuthModal, setShowAuthModal] = useState(false)
 
-  const [engine, setEngine] = useState<EngineType>('neural')
+  const [engine, setEngine] = useState<PreviewEngine>('neural')
   const [text, setText] = useState('')
-  const [preset, setPreset] = useState('none')
-  const [language, setLanguage] = useState('en-US')
   const [voice, setVoice] = useState('Joanna')
-  const [speed, setSpeed] = useState(100)
-  const [volume, setVolume] = useState(0)
-  const [breakTime, setBreakTime] = useState(0)
-  const [pitch, setPitch] = useState(0)
-  const [emphasis, setEmphasis] = useState('none')
-  const [domainStyle, setDomainStyle] = useState('none')
 
-  const [isGenerating, setIsGenerating] = useState(false)
+  const {
+    state: previewState,
+    errorMessage: previewError,
+    isGenerating,
+    generate: generatePreview,
+    reportAudioError,
+    clearError: clearPreviewError,
+  } = useTtsPreview()
   const [currentAudioUrl, setCurrentAudioUrl] = useState<string | null>(null)
   const [isPlaying, setIsPlaying] = useState(false)
   const [audioDuration, setAudioDuration] = useState(0)
@@ -122,24 +63,15 @@ function App() {
   const userRole = status === 'authenticated' ? 'user' : 'guest'
   const userEmail =
     user?.email ?? user?.preferredUsername ?? user?.name ?? 'Authenticated User'
-  const charLimit = userRole === 'user' ? 3000 : 500
+  const charLimit = 500
 
-  useEffect(() => {
-    if (preset === 'none') {
-      return
-    }
-    const selectedPreset = PRESETS.find((item) => item.id === preset)
-    if (!selectedPreset) {
-      return
-    }
-    if (selectedPreset.voice) {
-      setVoice(selectedPreset.voice)
-    }
-    if (selectedPreset.engine) {
-      setEngine(selectedPreset.engine)
-    }
-    setDomainStyle(selectedPreset.domain ?? 'none')
-  }, [preset])
+  const handleAudioFailure = useCallback(() => {
+    setIsPlaying(false)
+    setCurrentAudioUrl(null)
+    setAudioCurrentTime(0)
+    setAudioDuration(0)
+    reportAudioError()
+  }, [reportAudioError])
 
   useEffect(() => {
     const audio = audioRef.current
@@ -149,34 +81,18 @@ function App() {
     const onTimeUpdate = () => setAudioCurrentTime(audio.currentTime)
     const onLoadedMetadata = () => setAudioDuration(audio.duration)
     const onEnded = () => setIsPlaying(false)
+    const onError = () => handleAudioFailure()
     audio.addEventListener('timeupdate', onTimeUpdate)
     audio.addEventListener('loadedmetadata', onLoadedMetadata)
     audio.addEventListener('ended', onEnded)
+    audio.addEventListener('error', onError)
     return () => {
       audio.removeEventListener('timeupdate', onTimeUpdate)
       audio.removeEventListener('loadedmetadata', onLoadedMetadata)
       audio.removeEventListener('ended', onEnded)
+      audio.removeEventListener('error', onError)
     }
-  }, [currentAudioUrl])
-
-  useEffect(() => {
-    if (status === 'authenticated' && ttsHistory.length === 0) {
-      setTtsHistory([
-        {
-          id: 'tts-101',
-          text_content:
-            'Welcome to Polly Voice! This is an example generated audio history item.',
-          voice: 'Joanna',
-          engine: 'neural',
-          audio_s3_key: 'tts/user-001/audio-101.mp3',
-          audio_url:
-            'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3',
-          audio_file_size: 245000,
-          created_at: Date.now() - 3600000,
-        },
-      ])
-    }
-  }, [status, ttsHistory.length])
+  }, [currentAudioUrl, handleAudioFailure])
 
   useEffect(() => {
     if (status === 'anonymous' && activeTab === 'history') {
@@ -205,46 +121,33 @@ function App() {
       const result = loadEvent.target?.result
       if (typeof result === 'string') {
         setText(result.slice(0, charLimit))
+        clearPreviewError()
       }
     }
     reader.readAsText(file)
   }
 
-  const handleGenerateTTS = (isPreview = false) => {
-    if (!text.trim()) {
-      alert('Vui lòng nhập văn bản cần chuyển đổi!')
-      return
+  const handleGenerateTTS = async () => {
+    if (audioRef.current) {
+      audioRef.current.pause()
+      audioRef.current.currentTime = 0
     }
-    if (text.length > charLimit) {
-      alert(
-        `Đã vượt quá giới hạn ${charLimit} ký tự của tài khoản ${userRole.toUpperCase()}`,
-      )
-      return
-    }
-    setIsGenerating(true)
     setIsPlaying(false)
-    setTimeout(() => {
-      const mockAudio =
-        'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3'
-      setCurrentAudioUrl(mockAudio)
-      setIsGenerating(false)
-      if (userRole === 'user' && !isPreview) {
-        const now = Date.now()
-        setTtsHistory((previous) => [
-          {
-            id: `tts-${now}`,
-            text_content: text,
-            voice,
-            engine,
-            audio_s3_key: `tts/demo-authenticated-user/${now}.mp3`,
-            audio_url: mockAudio,
-            audio_file_size: Math.floor(text.length * 1250),
-            created_at: now,
-          },
-          ...previous,
-        ])
-      }
-    }, 1200)
+    setAudioCurrentTime(0)
+    setAudioDuration(0)
+
+    const response = await generatePreview({
+      text,
+      voice,
+      engine,
+      output_format: 'mp3',
+    })
+    if (!response) {
+      return
+    }
+    setCurrentAudioUrl(response.audio_url)
+    setAudioCurrentTime(0)
+    setAudioDuration(0)
   }
 
   const togglePlayAudio = (url?: string) => {
@@ -252,8 +155,10 @@ function App() {
       setCurrentAudioUrl(url)
       setTimeout(() => {
         if (audioRef.current) {
-          audioRef.current.play()
-          setIsPlaying(true)
+          void audioRef.current
+            .play()
+            .then(() => setIsPlaying(true))
+            .catch(() => handleAudioFailure())
         }
       }, 100)
       return
@@ -265,8 +170,10 @@ function App() {
       audioRef.current.pause()
       setIsPlaying(false)
     } else {
-      audioRef.current.play()
-      setIsPlaying(true)
+      void audioRef.current
+        .play()
+        .then(() => setIsPlaying(true))
+        .catch(() => handleAudioFailure())
     }
   }
 
@@ -366,41 +273,34 @@ function App() {
             form={{
               engine,
               text,
-              preset,
-              language,
               voice,
-              speed,
-              volume,
-              breakTime,
-              pitch,
-              emphasis,
-              domainStyle,
             }}
-            presets={PRESETS}
             voices={VOICES}
             userRole={userRole}
             charLimit={charLimit}
+            previewState={previewState}
+            previewError={previewError}
             isGenerating={isGenerating}
             currentAudioUrl={currentAudioUrl}
             isPlaying={isPlaying}
             audioDuration={audioDuration}
             audioCurrentTime={audioCurrentTime}
             audioRef={audioRef}
-            onTextChange={setText}
-            onPresetChange={setPreset}
-            onEngineChange={setEngine}
-            onLanguageChange={setLanguage}
-            onVoiceChange={setVoice}
-            onSpeedChange={setSpeed}
-            onVolumeChange={setVolume}
-            onBreakTimeChange={setBreakTime}
-            onPitchChange={setPitch}
-            onEmphasisChange={setEmphasis}
-            onDomainStyleChange={setDomainStyle}
+            onTextChange={(value) => {
+              setText(value)
+              clearPreviewError()
+            }}
+            onEngineChange={(value) => {
+              setEngine(value)
+              clearPreviewError()
+            }}
+            onVoiceChange={(value) => {
+              setVoice(value)
+              clearPreviewError()
+            }}
             onTextFileUpload={handleTextFileUpload}
             onGenerate={handleGenerateTTS}
             onToggleAudio={() => togglePlayAudio()}
-            onOpenAuth={() => setShowAuthModal(true)}
             formatTime={formatTime}
           />
         )}

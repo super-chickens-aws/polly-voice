@@ -1,18 +1,21 @@
 import type { ChangeEvent, RefObject } from 'react'
 import { AudioPlayer } from '../../components/audio/AudioPlayer'
-import type {
-  EngineType,
-  PresetItem,
-  TtsFormState,
-  UserRole,
-} from '../../types/app'
+import type { UserRole } from '../../types/app'
+import type { PreviewEngine, TtsPreviewState } from './ttsPreviewTypes'
+
+interface TtsPreviewForm {
+  engine: PreviewEngine
+  text: string
+  voice: string
+}
 
 interface TtsPanelProps {
-  form: TtsFormState
-  presets: PresetItem[]
+  form: TtsPreviewForm
   voices: string[]
   userRole: UserRole
   charLimit: number
+  previewState: TtsPreviewState
+  previewError: string
   isGenerating: boolean
   currentAudioUrl: string | null
   isPlaying: boolean
@@ -20,29 +23,28 @@ interface TtsPanelProps {
   audioCurrentTime: number
   audioRef: RefObject<HTMLAudioElement | null>
   onTextChange: (value: string) => void
-  onPresetChange: (value: string) => void
-  onEngineChange: (value: EngineType) => void
-  onLanguageChange: (value: string) => void
+  onEngineChange: (value: PreviewEngine) => void
   onVoiceChange: (value: string) => void
-  onSpeedChange: (value: number) => void
-  onVolumeChange: (value: number) => void
-  onBreakTimeChange: (value: number) => void
-  onPitchChange: (value: number) => void
-  onEmphasisChange: (value: string) => void
-  onDomainStyleChange: (value: string) => void
   onTextFileUpload: (event: ChangeEvent<HTMLInputElement>) => void
-  onGenerate: (isPreview: boolean) => void
+  onGenerate: () => void
   onToggleAudio: () => void
-  onOpenAuth: () => void
   formatTime: (seconds: number) => string
 }
 
+const ERROR_STATES: TtsPreviewState[] = [
+  'validation-error',
+  'service-error',
+  'network-error',
+  'audio-error',
+]
+
 export function TtsPanel({
   form,
-  presets,
   voices,
   userRole,
   charLimit,
+  previewState,
+  previewError,
   isGenerating,
   currentAudioUrl,
   isPlaying,
@@ -50,22 +52,15 @@ export function TtsPanel({
   audioCurrentTime,
   audioRef,
   onTextChange,
-  onPresetChange,
   onEngineChange,
-  onLanguageChange,
   onVoiceChange,
-  onSpeedChange,
-  onVolumeChange,
-  onBreakTimeChange,
-  onPitchChange,
-  onEmphasisChange,
-  onDomainStyleChange,
   onTextFileUpload,
   onGenerate,
   onToggleAudio,
-  onOpenAuth,
   formatTime,
 }: TtsPanelProps) {
+  const hasError = ERROR_STATES.includes(previewState)
+
   return (
     <div className="tts-grid">
       <div className="glass-panel input-panel">
@@ -76,15 +71,19 @@ export function TtsPanel({
             <input
               type="file"
               accept=".txt"
+              disabled={isGenerating}
               onChange={onTextFileUpload}
               hidden
             />
           </label>
         </div>
         <div className="form-group">
+          <label htmlFor="tts-preview-text">Nội dung Preview</label>
           <textarea
-            placeholder="Nhập nội dung tiếng Anh cần đọc tại đây..."
+            id="tts-preview-text"
+            placeholder="Nhập nội dung cần đọc tại đây..."
             value={form.text}
+            disabled={isGenerating}
             onChange={(event) => onTextChange(event.target.value)}
             maxLength={charLimit}
           />
@@ -98,36 +97,55 @@ export function TtsPanel({
               />
             </div>
             <span>
-              {form.text.length} / {charLimit} ký tự ({userRole.toUpperCase()})
+              {form.text.length} / {charLimit} ký tự
             </span>
           </div>
         </div>
-        {userRole === 'guest' && (
-          <div className="notice-banner">
-            💡 Bạn đang ở chế độ <strong>Guest</strong> (giới hạn 500 ký tự &
-            không lưu lịch sử).{' '}
-            <span className="link-span" onClick={onOpenAuth}>
-              Đăng nhập Cognito
-            </span>{' '}
-            để mở khóa 3,000 ký tự.
-          </div>
-        )}
+        <div className="notice-banner">
+          Preview công khai hỗ trợ tối đa 500 ký tự. Tạo audio bất đồng bộ và
+          lưu lịch sử chưa được kết nối trong bước này.
+          {userRole === 'guest' && ' Không cần đăng nhập để nghe Preview.'}
+        </div>
         <div className="action-button-row">
           <button
-            className="btn btn-secondary"
-            disabled={isGenerating || !form.text.trim()}
-            onClick={() => onGenerate(true)}
-          >
-            ▶ Nghe Thử Preview
-          </button>
-          <button
+            type="button"
             className="btn btn-primary"
             disabled={isGenerating || !form.text.trim()}
-            onClick={() => onGenerate(false)}
+            onClick={onGenerate}
           >
-            {isGenerating ? '⏳ Đang tổng hợp giọng đọc...' : '✨ Tạo Audio MP3'}
+            {isGenerating ? '⏳ Đang tạo Preview...' : '▶ Nghe Thử Preview'}
+          </button>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            disabled
+            title="Tính năng async TTS chưa được kết nối"
+          >
+            Tạo Audio MP3 — Chưa kết nối
           </button>
         </div>
+
+        {hasError && (
+          <div className="auth-error" role="alert">
+            <p>{previewError}</p>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              disabled={isGenerating || !form.text.trim()}
+              onClick={onGenerate}
+            >
+              Thử lại
+            </button>
+          </div>
+        )}
+        {previewState === 'success' && (
+          <p aria-live="polite">Preview đã sẵn sàng để nghe.</p>
+        )}
+        {previewState === 'generating' && currentAudioUrl && (
+          <p aria-live="polite">
+            Đang tạo Preview mới; bản Preview gần nhất vẫn khả dụng bên dưới.
+          </p>
+        )}
         {currentAudioUrl && (
           <AudioPlayer
             audioRef={audioRef}
@@ -142,183 +160,53 @@ export function TtsPanel({
       </div>
 
       <div className="glass-panel settings-panel">
-        <h2>Cấu Hình Giọng Đọc</h2>
+        <h2>Cấu Hình Preview</h2>
         <div className="form-group">
           <label>Voice Engine (Polly)</label>
           <div className="engine-selector">
-            {(['neural', 'standard', 'long-form'] as const).map((engine) => (
+            {(['neural', 'standard'] as const).map((engine) => (
               <button
+                type="button"
                 key={engine}
                 className={`engine-tab ${form.engine === engine ? 'active' : ''}`}
+                disabled={isGenerating}
                 onClick={() => onEngineChange(engine)}
               >
-                {engine === 'neural'
-                  ? 'Neural ⚡'
-                  : engine === 'standard'
-                    ? 'Standard'
-                    : 'Long-form'}
+                {engine === 'neural' ? 'Neural ⚡' : 'Standard'}
               </button>
             ))}
           </div>
         </div>
         <div className="form-group">
-          <label>Cấu hình có sẵn (Preset)</label>
+          <label htmlFor="tts-preview-voice">Giọng đọc (Voice)</label>
           <select
-            value={form.preset}
-            onChange={(event) => onPresetChange(event.target.value)}
+            id="tts-preview-voice"
+            value={form.voice}
+            disabled={isGenerating}
+            onChange={(event) => onVoiceChange(event.target.value)}
           >
-            {presets.map((preset) => (
-              <option key={preset.id} value={preset.id}>
-                {preset.name} — {preset.desc}
+            {voices.map((voice) => (
+              <option key={voice} value={voice}>
+                {voice}
               </option>
             ))}
           </select>
         </div>
-        <div className="form-row form-group">
-          <div>
-            <label>Ngôn ngữ</label>
-            <select
-              value={form.language}
-              onChange={(event) => onLanguageChange(event.target.value)}
-            >
-              <option value="en-US">English (US)</option>
-              <option value="en-GB">English (UK)</option>
-            </select>
-          </div>
-          <div>
-            <label>Giọng đọc (Voice)</label>
-            <select
-              value={form.voice}
-              onChange={(event) => onVoiceChange(event.target.value)}
-            >
-              {voices.map((voice) => (
-                <option key={voice} value={voice}>
-                  {voice}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-        <Slider
-          label="Tốc độ đọc (Speed Rate)"
-          value={form.speed}
-          display={`${form.speed}%`}
-          min={20}
-          max={200}
-          step={5}
-          onChange={onSpeedChange}
-        />
-        <Slider
-          label="Âm lượng (Volume)"
-          value={form.volume}
-          display={`${form.volume > 0 ? `+${form.volume}` : form.volume} dB`}
-          min={-10}
-          max={10}
-          step={1}
-          onChange={onVolumeChange}
-        />
-        <Slider
-          label="Tạm dừng (Break Time)"
-          value={form.breakTime}
-          display={`${form.breakTime} ms`}
-          min={0}
-          max={2000}
-          step={100}
-          onChange={onBreakTimeChange}
-        />
-        <hr className="divider" />
-        <h3>Thông Số SSML Nâng Cao</h3>
-        <Slider
-          label="Cao độ giọng (Pitch)"
-          value={form.pitch}
-          display={`${form.pitch > 0 ? `+${form.pitch}` : form.pitch}%`}
-          min={-20}
-          max={20}
-          step={1}
-          disabled={form.engine !== 'standard'}
-          helper="⚠️ Chỉ hỗ trợ cho Standard Engine"
-          onChange={onPitchChange}
-        />
-        <div
-          className={`form-group ${form.engine !== 'standard' ? 'disabled-option' : ''}`}
-        >
-          <label>Nhấn mạnh (Emphasis)</label>
-          <select
-            value={form.emphasis}
-            onChange={(event) => onEmphasisChange(event.target.value)}
-            disabled={form.engine !== 'standard'}
-          >
-            <option value="none">Không nhấn mạnh</option>
-            <option value="reduced">Giảm nhẹ (Reduced)</option>
-            <option value="moderate">Vừa phải (Moderate)</option>
-            <option value="strong">Mạnh mẽ (Strong)</option>
+        <div className="form-group disabled-option">
+          <label>Định dạng đầu ra</label>
+          <select value="mp3" disabled>
+            <option value="mp3">MP3</option>
           </select>
+          <span className="helper-text">
+            MVP Preview hiện sử dụng định dạng MP3.
+          </span>
         </div>
-        <div
-          className={`form-group ${form.engine !== 'neural' ? 'disabled-option' : ''}`}
-        >
-          <label>Phong cách đọc (Domain Style)</label>
-          <select
-            value={form.domainStyle}
-            onChange={(event) => onDomainStyleChange(event.target.value)}
-            disabled={form.engine !== 'neural'}
-          >
-            <option value="none">Mặc định (Default)</option>
-            <option value="news">Đọc tin tức (News)</option>
-            <option value="conversational">Trò chuyện (Conversational)</option>
-          </select>
-          {form.engine !== 'neural' && (
-            <span className="helper-text">
-              ⚠️ Chỉ hỗ trợ cho Neural Engine
-            </span>
-          )}
+        <div className="notice-banner">
+          Preset, ngôn ngữ, tốc độ, âm lượng, ngắt nghỉ, cao độ, nhấn mạnh và
+          phong cách đọc không được backend Preview hỗ trợ nên đã được tắt khỏi
+          tương tác.
         </div>
       </div>
-    </div>
-  )
-}
-
-interface SliderProps {
-  label: string
-  value: number
-  display: string
-  min: number
-  max: number
-  step: number
-  disabled?: boolean
-  helper?: string
-  onChange: (value: number) => void
-}
-
-function Slider({
-  label,
-  value,
-  display,
-  min,
-  max,
-  step,
-  disabled = false,
-  helper,
-  onChange,
-}: SliderProps) {
-  return (
-    <div
-      className={`form-group slider-container ${disabled ? 'disabled-option' : ''}`}
-    >
-      <div className="slider-header">
-        <label>{label}</label>
-        <span className="slider-value">{display}</span>
-      </div>
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        onChange={(event) => onChange(Number(event.target.value))}
-        disabled={disabled}
-      />
-      {disabled && helper && <span className="helper-text">{helper}</span>}
     </div>
   )
 }

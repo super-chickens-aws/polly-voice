@@ -34,7 +34,7 @@ function toApiError(response: Response, body: unknown): ApiError {
   )
 }
 
-export function createApiClient(getAccessToken: AccessTokenProvider) {
+export function createApiClient(getAccessToken?: AccessTokenProvider) {
   return async function request<TResponse, TBody = unknown>(
     apiRequest: ApiRequest<TBody>,
     options: ApiRequestOptions = {},
@@ -45,6 +45,13 @@ export function createApiClient(getAccessToken: AccessTokenProvider) {
         headers.set('Content-Type', 'application/json')
       }
       if (apiRequest.authenticated !== false) {
+        if (!getAccessToken) {
+          throw new ApiError(
+            0,
+            'AUTH_CLIENT_NOT_CONFIGURED',
+            'An authenticated API client is required.',
+          )
+        }
         headers.set('Authorization', await getAccessToken(forceRefresh))
       }
 
