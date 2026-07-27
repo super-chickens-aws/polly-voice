@@ -5,6 +5,14 @@ import { connectDatabase } from './db.js';
 const proxy = serverless(app);
 
 export const handler = async (event: unknown, context: unknown) => {
-  await connectDatabase();
-  return proxy(event as any, context as any);
+  console.info('Lambda request received');
+  try {
+    await connectDatabase();
+    const response = await proxy(event as any, context as any);
+    console.info('Lambda request completed');
+    return response;
+  } catch (error) {
+    console.error('Unhandled Lambda error', error);
+    throw error;
+  }
 };
