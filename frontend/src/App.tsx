@@ -179,10 +179,7 @@ function App() {
   }, [status, ttsHistory.length])
 
   useEffect(() => {
-    if (
-      status === 'anonymous' &&
-      (activeTab === 'history' || activeTab === 'profile')
-    ) {
+    if (status === 'anonymous' && activeTab === 'history') {
       setActiveTab('tts')
     }
   }, [activeTab, status])
@@ -437,9 +434,7 @@ function App() {
             formatDate={formatDate}
           />
         )}
-        {activeTab === 'profile' && userRole === 'user' && (
-          <ProfilePanel subject={user?.subject} userEmail={userEmail} />
-        )}
+        {activeTab === 'profile' && <ProfilePanel />}
       </main>
       {showAuthModal && (
         <AuthModal

@@ -43,6 +43,12 @@ export function AppHeader({
         {userRole === 'guest' ? (
           <div className="guest-badge-group">
             <span className="badge badge-guest">⚡ Guest Mode</span>
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => onTabChange('profile')}
+            >
+              ⚙️ Profile
+            </button>
             <button className="btn btn-secondary btn-sm" onClick={onLogin}>
               🔑 Đăng Nhập
             </button>
