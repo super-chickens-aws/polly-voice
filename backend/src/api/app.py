@@ -61,6 +61,33 @@ JOB_RESPONSE_FIELDS = (
     "error_message",
     "output_key",
 )
+STT_REQUEST_FIELDS = {"media_format", "language_code"}
+STT_CONTENT_TYPES = {
+    "mp3": "audio/mpeg",
+    "mp4": "audio/mp4",
+    "wav": "audio/wav",
+    "flac": "audio/flac",
+    "ogg": "audio/ogg",
+    "amr": "audio/amr",
+    "webm": "audio/webm",
+    "m4a": "audio/mp4",
+}
+STT_LANGUAGES = {"vi-VN", "en-US"}
+STT_RESPONSE_FIELDS = (
+    "job_id",
+    "type",
+    "status",
+    "media_format",
+    "language_code",
+    "input_key",
+    "output_key",
+    "transcript_key",
+    "created_at",
+    "updated_at",
+    "completed_at",
+    "error_code",
+    "error_message",
+)
 
 
 class PreviewValidationError(ValueError):
@@ -83,6 +110,15 @@ class ProfileValidationError(ValueError):
 
 class JobValidationError(ValueError):
     """An invalid client request for an asynchronous TTS job."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+class SttValidationError(ValueError):
+    """An invalid client request for an asynchronous STT job."""
 
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
@@ -356,12 +392,56 @@ def _parse_job_request(event: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def _parse_stt_request(event: dict[str, Any]) -> dict[str, str]:
+    body = event.get("body")
+    if not isinstance(body, str):
+        raise SttValidationError("INVALID_JSON", "Request body must be valid JSON.")
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError as error:
+        raise SttValidationError(
+            "INVALID_JSON", "Request body must be valid JSON."
+        ) from error
+    if not isinstance(payload, dict):
+        raise SttValidationError(
+            "INVALID_JSON", "Request body must be a JSON object."
+        )
+    if set(payload) - STT_REQUEST_FIELDS:
+        raise SttValidationError(
+            "UNKNOWN_FIELDS", "Request body contains unsupported fields."
+        )
+
+    if "media_format" not in payload:
+        raise SttValidationError("MISSING_MEDIA_FORMAT", "media_format is required.")
+    media_format = payload["media_format"]
+    if not isinstance(media_format, str) or media_format not in STT_CONTENT_TYPES:
+        raise SttValidationError(
+            "INVALID_MEDIA_FORMAT", "media_format is not supported."
+        )
+
+    if "language_code" not in payload:
+        raise SttValidationError(
+            "MISSING_LANGUAGE_CODE", "language_code is required."
+        )
+    language_code = payload["language_code"]
+    if not isinstance(language_code, str) or language_code not in STT_LANGUAGES:
+        raise SttValidationError(
+            "INVALID_LANGUAGE_CODE",
+            "language_code must be either vi-VN or en-US.",
+        )
+    return {"media_format": media_format, "language_code": language_code}
+
+
 def _profile_body(item: dict[str, Any]) -> dict[str, Any]:
     return {"profile": {field: item.get(field) for field in PROFILE_FIELDS}}
 
 
 def _public_job(item: dict[str, Any]) -> dict[str, Any]:
     return {field: item[field] for field in JOB_RESPONSE_FIELDS if field in item}
+
+
+def _public_stt_job(item: dict[str, Any]) -> dict[str, Any]:
+    return {field: item[field] for field in STT_RESPONSE_FIELDS if field in item}
 
 
 def _handle_get_profile(cognito_sub: str, request_id: str | None) -> dict[str, Any]:
@@ -617,6 +697,200 @@ def _handle_get_tts_job(
     return _response(200, {"job": _public_job(item)})
 
 
+def _mark_stt_upload_failed(
+    table: Any, job_id: str, request_id: str | None
+) -> None:
+    try:
+        table.update_item(
+            Key={"job_id": job_id},
+            UpdateExpression=(
+                "SET #status = :failed, error_code = :error_code, "
+                "error_message = :error_message, updated_at = :updated_at"
+            ),
+            ExpressionAttributeNames={"#status": "status"},
+            ExpressionAttributeValues={
+                ":failed": "FAILED",
+                ":error_code": "UPLOAD_URL_ERROR",
+                ":error_message": "Unable to prepare the media upload.",
+                ":updated_at": int(datetime.now(UTC).timestamp()),
+            },
+        )
+    except Exception:
+        LOGGER.exception(
+            "stt_upload_compensation_error",
+            extra={"request_id": request_id, "job_id": job_id},
+        )
+
+
+def _handle_create_stt_job(
+    event: dict[str, Any], owner_sub: str, request_id: str | None
+) -> dict[str, Any]:
+    try:
+        request = _parse_stt_request(event)
+    except SttValidationError as error:
+        return _error_response(400, error.code, error.message, request_id)
+
+    now = int(datetime.now(UTC).timestamp())
+    try:
+        ttl_days = int(os.environ.get("JOB_TTL_DAYS", "30"))
+        job_id = str(uuid.uuid4())
+        input_key = (
+            f"input/stt/jobs/{job_id}/source.{request['media_format']}"
+        )
+        item: dict[str, Any] = {
+            "job_id": job_id,
+            "owner_sub": owner_sub,
+            "type": "STT",
+            "status": "AWAITING_UPLOAD",
+            "media_format": request["media_format"],
+            "content_type": STT_CONTENT_TYPES[request["media_format"]],
+            "language_code": request["language_code"],
+            "input_key": input_key,
+            "created_at": now,
+            "updated_at": now,
+            "expires_at": now + ttl_days * 86400,
+        }
+        table = _create_conversion_jobs_table()
+        table.put_item(Item=item)
+    except ClientError as error:
+        LOGGER.exception(
+            "stt_job_database_error",
+            extra={"request_id": request_id, "error_code": _client_error_code(error)},
+        )
+        return _error_response(
+            502, "DATABASE_ERROR", "Unable to create the STT job.", request_id
+        )
+    except Exception:
+        LOGGER.exception("stt_job_unexpected_error", extra={"request_id": request_id})
+        return _error_response(
+            500, "INTERNAL_ERROR", "An internal error occurred.", request_id
+        )
+
+    try:
+        expires_in = int(os.environ.get("PRESIGNED_URL_TTL_SECONDS", "900"))
+        upload_url = _create_s3_client().generate_presigned_url(
+            "put_object",
+            Params={
+                "Bucket": os.environ["MEDIA_BUCKET_NAME"],
+                "Key": input_key,
+                "ContentType": item["content_type"],
+            },
+            ExpiresIn=expires_in,
+        )
+    except Exception:
+        LOGGER.exception(
+            "stt_upload_url_error",
+            extra={"request_id": request_id, "job_id": job_id},
+        )
+        _mark_stt_upload_failed(table, job_id, request_id)
+        return _error_response(
+            502, "STORAGE_ERROR", "Unable to prepare the media upload.", request_id
+        )
+
+    return _response(
+        201,
+        {
+            "job": _public_stt_job(item),
+            "upload": {
+                "method": "PUT",
+                "url": upload_url,
+                "headers": {"Content-Type": item["content_type"]},
+                "expires_in": expires_in,
+            },
+        },
+    )
+
+
+def _handle_list_stt_jobs(
+    owner_sub: str, request_id: str | None
+) -> dict[str, Any]:
+    jobs: list[dict[str, Any]] = []
+    last_evaluated_key: dict[str, Any] | None = None
+    try:
+        table = _create_conversion_jobs_table()
+        while len(jobs) < 20:
+            query: dict[str, Any] = {
+                "IndexName": "ownerSub-createdAt-index",
+                "KeyConditionExpression": "#owner_sub = :owner_sub",
+                "ExpressionAttributeNames": {"#owner_sub": "owner_sub"},
+                "ExpressionAttributeValues": {":owner_sub": owner_sub},
+                "ScanIndexForward": False,
+                "Limit": 20,
+            }
+            if last_evaluated_key is not None:
+                query["ExclusiveStartKey"] = last_evaluated_key
+            result = table.query(**query)
+            items = result.get("Items", [])
+            if not isinstance(items, list):
+                raise TypeError("DynamoDB query returned invalid Items.")
+            for item in items:
+                if (
+                    isinstance(item, dict)
+                    and item.get("owner_sub") == owner_sub
+                    and item.get("type") == "STT"
+                ):
+                    jobs.append(_public_stt_job(item))
+                    if len(jobs) == 20:
+                        break
+            next_key = result.get("LastEvaluatedKey")
+            if not isinstance(next_key, dict) or not next_key:
+                break
+            last_evaluated_key = next_key
+    except ClientError as error:
+        LOGGER.exception(
+            "stt_job_database_error",
+            extra={"request_id": request_id, "error_code": _client_error_code(error)},
+        )
+        return _error_response(
+            502, "DATABASE_ERROR", "Unable to list STT jobs.", request_id
+        )
+    except Exception:
+        LOGGER.exception("stt_job_unexpected_error", extra={"request_id": request_id})
+        return _error_response(
+            500, "INTERNAL_ERROR", "An internal error occurred.", request_id
+        )
+    return _response(200, {"jobs": jobs})
+
+
+def _handle_get_stt_job(
+    event: dict[str, Any], owner_sub: str, request_id: str | None
+) -> dict[str, Any]:
+    path_parameters = event.get("pathParameters")
+    job_id = (
+        path_parameters.get("job_id") if isinstance(path_parameters, dict) else None
+    )
+    if not isinstance(job_id, str) or not job_id.strip():
+        return _error_response(
+            400, "INVALID_JOB_ID", "A non-empty job_id is required.", request_id
+        )
+    job_id = job_id.strip()
+    try:
+        result = _create_conversion_jobs_table().get_item(Key={"job_id": job_id})
+    except ClientError as error:
+        LOGGER.exception(
+            "stt_job_database_error",
+            extra={"request_id": request_id, "error_code": _client_error_code(error)},
+        )
+        return _error_response(
+            502, "DATABASE_ERROR", "Unable to access the STT job.", request_id
+        )
+    except Exception:
+        LOGGER.exception("stt_job_unexpected_error", extra={"request_id": request_id})
+        return _error_response(
+            500, "INTERNAL_ERROR", "An internal error occurred.", request_id
+        )
+    item = result.get("Item")
+    if (
+        not isinstance(item, dict)
+        or item.get("owner_sub") != owner_sub
+        or item.get("type") != "STT"
+    ):
+        return _error_response(
+            404, "JOB_NOT_FOUND", "The STT job does not exist.", request_id
+        )
+    return _response(200, {"job": _public_stt_job(item)})
+
+
 def _handle_preview(event: dict[str, Any], request_id: str | None) -> dict[str, Any]:
     try:
         request = _parse_preview_request(event)
@@ -740,6 +1014,26 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         if path == "/tts/jobs":
             return _handle_list_tts_jobs(owner_sub, request_id)
         return _handle_get_tts_job(event, owner_sub, request_id)
+
+    stt_job_route = (
+        (method == "POST" and path == "/stt/jobs")
+        or (method == "GET" and path == "/stt/jobs")
+        or (method == "GET" and path == "/stt/jobs/{job_id}")
+    )
+    if stt_job_route:
+        owner_sub = _authenticated_sub(event)
+        if owner_sub is None:
+            return _error_response(
+                401,
+                "UNAUTHORIZED",
+                "A valid authenticated user is required.",
+                request_id,
+            )
+        if method == "POST":
+            return _handle_create_stt_job(event, owner_sub, request_id)
+        if path == "/stt/jobs":
+            return _handle_list_stt_jobs(owner_sub, request_id)
+        return _handle_get_stt_job(event, owner_sub, request_id)
 
     LOGGER.info(
         "api_route_not_implemented",

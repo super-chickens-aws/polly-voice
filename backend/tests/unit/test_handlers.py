@@ -1144,6 +1144,425 @@ def test_get_tts_job_detail_does_not_return_text(monkeypatch: Any) -> None:
     assert "text" not in json.loads(response["body"])["job"]
 
 
+class FakeSttTable:
+    def __init__(
+        self,
+        *,
+        item: dict[str, object] | None = None,
+        pages: list[dict[str, object]] | None = None,
+        put_error: ClientError | None = None,
+    ) -> None:
+        self.item = item
+        self.pages = list(pages or [{"Items": []}])
+        self.put_error = put_error
+        self.put_calls: list[dict[str, object]] = []
+        self.update_calls: list[dict[str, object]] = []
+        self.query_calls: list[dict[str, object]] = []
+        self.get_calls: list[dict[str, object]] = []
+
+    def put_item(self, **kwargs: object) -> None:
+        self.put_calls.append(kwargs)
+        if self.put_error is not None:
+            raise self.put_error
+
+    def update_item(self, **kwargs: object) -> None:
+        self.update_calls.append(kwargs)
+
+    def query(self, **kwargs: object) -> dict[str, object]:
+        self.query_calls.append(kwargs)
+        return self.pages.pop(0)
+
+    def get_item(self, **kwargs: object) -> dict[str, object]:
+        self.get_calls.append(kwargs)
+        return {} if self.item is None else {"Item": self.item}
+
+
+class FakeSttS3:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.calls: list[dict[str, object]] = []
+
+    def generate_presigned_url(
+        self, operation: str, **kwargs: object
+    ) -> str:
+        self.calls.append({"operation": operation, **kwargs})
+        if self.error is not None:
+            raise self.error
+        return "https://example.test/stt-upload"
+
+
+def _stt_event(
+    method: str,
+    resource: str = "/stt/jobs",
+    payload: object | None = None,
+    *,
+    job_id: str | None = None,
+) -> dict[str, Any]:
+    event: dict[str, Any] = {
+        "httpMethod": method,
+        "resource": resource,
+        "requestContext": {
+            "authorizer": {"claims": {"sub": "authenticated-user"}}
+        },
+    }
+    if payload is not None:
+        event["body"] = json.dumps(payload)
+    if resource == "/stt/jobs/{job_id}":
+        event["pathParameters"] = {} if job_id is None else {"job_id": job_id}
+    return event
+
+
+def _configure_stt(
+    monkeypatch: Any,
+    handler: ModuleType,
+    table: FakeSttTable,
+    s3: FakeSttS3,
+) -> None:
+    monkeypatch.setattr(handler, "_create_conversion_jobs_table", lambda: table)
+    monkeypatch.setattr(handler, "_create_s3_client", lambda: s3)
+    monkeypatch.setattr(
+        handler,
+        "_create_sqs_client",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("STT API must not create an SQS client.")
+        ),
+    )
+    monkeypatch.setenv("MEDIA_BUCKET_NAME", "unit-test-media")
+    monkeypatch.setenv("JOB_TTL_DAYS", "30")
+    monkeypatch.setenv("PRESIGNED_URL_TTL_SECONDS", "900")
+
+
+def _create_stt_response(
+    monkeypatch: Any,
+    payload: object,
+    *,
+    table: FakeSttTable | None = None,
+    s3: FakeSttS3 | None = None,
+) -> tuple[dict[str, Any], FakeSttTable, FakeSttS3]:
+    handler = _load_handler("api")
+    fake_table = table or FakeSttTable()
+    fake_s3 = s3 or FakeSttS3()
+    _configure_stt(monkeypatch, handler, fake_table, fake_s3)
+    response = handler.lambda_handler(
+        _stt_event("POST", payload=payload), LambdaContext()
+    )
+    return response, fake_table, fake_s3
+
+
+def _stt_item(**overrides: object) -> dict[str, object]:
+    item: dict[str, object] = {
+        "job_id": "stt-job-1",
+        "owner_sub": "authenticated-user",
+        "type": "STT",
+        "status": "AWAITING_UPLOAD",
+        "media_format": "mp3",
+        "content_type": "audio/mpeg",
+        "language_code": "vi-VN",
+        "input_key": "input/stt/jobs/stt-job-1/source.mp3",
+        "created_at": Decimal("123"),
+        "updated_at": Decimal("456"),
+        "expires_at": Decimal("999"),
+    }
+    item.update(overrides)
+    return item
+
+
+def test_post_stt_job_success_and_presigned_put(monkeypatch: Any) -> None:
+    response, table, s3 = _create_stt_response(
+        monkeypatch, {"media_format": "mp3", "language_code": "vi-VN"}
+    )
+
+    body = json.loads(response["body"])
+    assert response["statusCode"] == 201
+    assert body["job"]["status"] == "AWAITING_UPLOAD"
+    assert body["job"]["type"] == "STT"
+    assert body["upload"] == {
+        "method": "PUT",
+        "url": "https://example.test/stt-upload",
+        "headers": {"Content-Type": "audio/mpeg"},
+        "expires_in": 900,
+    }
+    item = table.put_calls[0]["Item"]
+    assert item["owner_sub"] == "authenticated-user"
+    assert item["status"] == "AWAITING_UPLOAD"
+    assert item["input_key"] == (
+        f"input/stt/jobs/{item['job_id']}/source.mp3"
+    )
+    assert item["expires_at"] == item["created_at"] + 30 * 86400
+    presign = s3.calls[0]
+    assert presign["operation"] == "put_object"
+    assert presign["Params"] == {
+        "Bucket": "unit-test-media",
+        "Key": item["input_key"],
+        "ContentType": "audio/mpeg",
+    }
+    assert presign["ExpiresIn"] == 900
+
+
+def test_post_stt_job_uses_claim_owner_only(monkeypatch: Any) -> None:
+    handler = _load_handler("api")
+    table = FakeSttTable()
+    s3 = FakeSttS3()
+    _configure_stt(monkeypatch, handler, table, s3)
+    event = _stt_event(
+        "POST", payload={"media_format": "wav", "language_code": "en-US"}
+    )
+    event["requestContext"]["authorizer"]["claims"]["sub"] = "claim-owner"
+
+    handler.lambda_handler(event, LambdaContext())
+
+    assert table.put_calls[0]["Item"]["owner_sub"] == "claim-owner"
+    assert str(table.put_calls[0]["Item"]["input_key"]).endswith(".wav")
+
+
+def test_post_stt_job_missing_authentication_returns_401() -> None:
+    handler = _load_handler("api")
+    response = handler.lambda_handler(
+        {
+            "httpMethod": "POST",
+            "resource": "/stt/jobs",
+            "body": json.dumps(
+                {"media_format": "mp3", "language_code": "vi-VN"}
+            ),
+        },
+        LambdaContext(),
+    )
+
+    assert response["statusCode"] == 401
+    assert json.loads(response["body"])["error"]["code"] == "UNAUTHORIZED"
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_code"),
+    [
+        ({"language_code": "vi-VN"}, "MISSING_MEDIA_FORMAT"),
+        (
+            {"media_format": "avi", "language_code": "vi-VN"},
+            "INVALID_MEDIA_FORMAT",
+        ),
+        ({"media_format": "mp3"}, "MISSING_LANGUAGE_CODE"),
+        (
+            {"media_format": "mp3", "language_code": "fr-FR"},
+            "INVALID_LANGUAGE_CODE",
+        ),
+        (
+            {
+                "media_format": "mp3",
+                "language_code": "vi-VN",
+                "priority": "high",
+            },
+            "UNKNOWN_FIELDS",
+        ),
+        (
+            {
+                "media_format": "mp3",
+                "language_code": "vi-VN",
+                "owner_sub": "attacker",
+            },
+            "UNKNOWN_FIELDS",
+        ),
+    ],
+)
+def test_post_stt_job_rejects_invalid_payloads(
+    payload: object, expected_code: str
+) -> None:
+    handler = _load_handler("api")
+
+    response = handler.lambda_handler(
+        _stt_event("POST", payload=payload), LambdaContext()
+    )
+
+    assert response["statusCode"] == 400
+    assert json.loads(response["body"])["error"]["code"] == expected_code
+
+
+def test_post_stt_job_rejects_invalid_json() -> None:
+    handler = _load_handler("api")
+    event = _stt_event("POST")
+    event["body"] = "{"
+
+    response = handler.lambda_handler(event, LambdaContext())
+
+    assert response["statusCode"] == 400
+    assert json.loads(response["body"])["error"]["code"] == "INVALID_JSON"
+
+
+def test_post_stt_job_database_failure_returns_502(monkeypatch: Any) -> None:
+    table = FakeSttTable(
+        put_error=_client_error("InternalServerError")
+    )
+    response, _, s3 = _create_stt_response(
+        monkeypatch,
+        {"media_format": "mp3", "language_code": "vi-VN"},
+        table=table,
+    )
+
+    assert response["statusCode"] == 502
+    assert json.loads(response["body"])["error"]["code"] == "DATABASE_ERROR"
+    assert s3.calls == []
+
+
+def test_post_stt_presign_failure_marks_job_failed(monkeypatch: Any) -> None:
+    table = FakeSttTable()
+    s3 = FakeSttS3(_client_error("InternalError"))
+    response, _, _ = _create_stt_response(
+        monkeypatch,
+        {"media_format": "mp3", "language_code": "vi-VN"},
+        table=table,
+        s3=s3,
+    )
+
+    assert response["statusCode"] == 502
+    assert json.loads(response["body"])["error"]["code"] == "STORAGE_ERROR"
+    values = table.update_calls[0]["ExpressionAttributeValues"]
+    assert values[":failed"] == "FAILED"
+    assert values[":error_code"] == "UPLOAD_URL_ERROR"
+
+
+def test_get_stt_jobs_filters_tts_and_serializes_decimals(
+    monkeypatch: Any,
+) -> None:
+    handler = _load_handler("api")
+    table = FakeSttTable(
+        pages=[
+            {
+                "Items": [
+                    _stt_item(),
+                    {
+                        "job_id": "tts-job",
+                        "owner_sub": "authenticated-user",
+                        "type": "TTS",
+                    },
+                ]
+            }
+        ]
+    )
+    monkeypatch.setattr(handler, "_create_conversion_jobs_table", lambda: table)
+
+    response = handler.lambda_handler(_stt_event("GET"), LambdaContext())
+
+    jobs = json.loads(response["body"])["jobs"]
+    assert response["statusCode"] == 200
+    assert len(jobs) == 1
+    assert jobs[0]["job_id"] == "stt-job-1"
+    assert jobs[0]["created_at"] == 123
+    assert isinstance(jobs[0]["created_at"], int)
+    assert "owner_sub" not in jobs[0]
+    assert "expires_at" not in jobs[0]
+
+
+def test_get_stt_jobs_paginates_and_limits_to_20(monkeypatch: Any) -> None:
+    handler = _load_handler("api")
+    first_page = {
+        "Items": [
+            {
+                "job_id": "tts-only",
+                "owner_sub": "authenticated-user",
+                "type": "TTS",
+            }
+        ],
+        "LastEvaluatedKey": {"job_id": "cursor"},
+    }
+    second_page = {
+        "Items": [
+            _stt_item(
+                job_id=f"stt-{index}",
+                input_key=f"input/stt/jobs/stt-{index}/source.mp3",
+            )
+            for index in range(25)
+        ]
+    }
+    table = FakeSttTable(pages=[first_page, second_page])
+    monkeypatch.setattr(handler, "_create_conversion_jobs_table", lambda: table)
+
+    response = handler.lambda_handler(_stt_event("GET"), LambdaContext())
+
+    jobs = json.loads(response["body"])["jobs"]
+    assert len(jobs) == 20
+    assert len(table.query_calls) == 2
+    assert table.query_calls[0]["ScanIndexForward"] is False
+    assert table.query_calls[0]["Limit"] == 20
+    assert table.query_calls[1]["ExclusiveStartKey"] == {"job_id": "cursor"}
+
+
+def test_get_stt_job_detail_success_with_decimal_timestamps(
+    monkeypatch: Any,
+) -> None:
+    handler = _load_handler("api")
+    table = FakeSttTable(
+        item=_stt_item(completed_at=Decimal("789"), output_uri="internal")
+    )
+    monkeypatch.setattr(handler, "_create_conversion_jobs_table", lambda: table)
+
+    response = handler.lambda_handler(
+        _stt_event("GET", "/stt/jobs/{job_id}", job_id="stt-job-1"),
+        LambdaContext(),
+    )
+
+    job = json.loads(response["body"])["job"]
+    assert response["statusCode"] == 200
+    assert job["created_at"] == 123
+    assert job["updated_at"] == 456
+    assert job["completed_at"] == 789
+    assert all(
+        isinstance(job[field], int)
+        for field in ("created_at", "updated_at", "completed_at")
+    )
+    assert "output_uri" not in job
+
+
+def test_get_stt_job_detail_missing_job_id_returns_400() -> None:
+    handler = _load_handler("api")
+    response = handler.lambda_handler(
+        _stt_event("GET", "/stt/jobs/{job_id}"), LambdaContext()
+    )
+
+    assert response["statusCode"] == 400
+    assert json.loads(response["body"])["error"]["code"] == "INVALID_JOB_ID"
+
+
+@pytest.mark.parametrize(
+    "item",
+    [
+        None,
+        _stt_item(owner_sub="another-user"),
+        _stt_item(type="TTS"),
+    ],
+)
+def test_get_stt_job_detail_inaccessible_records_return_404(
+    monkeypatch: Any, item: dict[str, object] | None
+) -> None:
+    handler = _load_handler("api")
+    table = FakeSttTable(item=item)
+    monkeypatch.setattr(handler, "_create_conversion_jobs_table", lambda: table)
+
+    response = handler.lambda_handler(
+        _stt_event("GET", "/stt/jobs/{job_id}", job_id="stt-job-1"),
+        LambdaContext(),
+    )
+
+    assert response["statusCode"] == 404
+    assert json.loads(response["body"])["error"]["code"] == "JOB_NOT_FOUND"
+
+
+def test_stt_download_and_delete_routes_remain_501() -> None:
+    handler = _load_handler("api")
+    download = handler.lambda_handler(
+        {
+            "httpMethod": "GET",
+            "resource": "/stt/jobs/{job_id}/download",
+        },
+        LambdaContext(),
+    )
+    delete = handler.lambda_handler(
+        {"httpMethod": "DELETE", "resource": "/stt/jobs/{job_id}"},
+        LambdaContext(),
+    )
+
+    assert download["statusCode"] == 501
+    assert delete["statusCode"] == 501
+
+
 def test_other_api_routes_still_return_501() -> None:
     handler = _load_handler("api")
     response = handler.lambda_handler(
