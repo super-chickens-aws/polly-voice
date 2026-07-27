@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import type { ChangeEvent, FormEvent } from 'react'
+import type { ChangeEvent } from 'react'
+import { useAuth } from './auth/useAuth'
 import { AuthModal } from './components/auth/AuthModal'
 import { AppHeader } from './components/layout/AppHeader'
 import { HistoryPanel } from './features/history/HistoryPanel'
@@ -7,14 +8,12 @@ import { ProfilePanel } from './features/profile/ProfilePanel'
 import { SttPanel } from './features/stt/SttPanel'
 import { TtsPanel } from './features/tts/TtsPanel'
 import type {
-  AuthMode,
   EngineType,
   HistoryTab,
   PresetItem,
   STTHistoryItem,
   TTSHistoryItem,
   TabType,
-  UserRole,
 } from './types/app'
 
 const PRESETS: PresetItem[] = [
@@ -87,16 +86,9 @@ const VOICES = [
 ]
 
 function App() {
+  const { status, user, login, register, logout } = useAuth()
   const [activeTab, setActiveTab] = useState<TabType>('tts')
-  const [userRole, setUserRole] = useState<UserRole>('guest')
-  const [userEmail, setUserEmail] = useState('')
-  const [cognitoSub, setCognitoSub] = useState('')
   const [showAuthModal, setShowAuthModal] = useState(false)
-  const [authMode, setAuthMode] = useState<AuthMode>('login')
-  const [authEmailInput, setAuthEmailInput] = useState('')
-  const [authPasswordInput, setAuthPasswordInput] = useState('')
-  const [authNameInput, setAuthNameInput] = useState('')
-  const [authError, setAuthError] = useState('')
 
   const [engine, setEngine] = useState<EngineType>('neural')
   const [text, setText] = useState('')
@@ -127,6 +119,9 @@ function App() {
   const [historyTab, setHistoryTab] = useState<HistoryTab>('tts')
   const [searchQuery, setSearchQuery] = useState('')
 
+  const userRole = status === 'authenticated' ? 'user' : 'guest'
+  const userEmail =
+    user?.email ?? user?.preferredUsername ?? user?.name ?? 'Authenticated User'
   const charLimit = userRole === 'user' ? 3000 : 500
 
   useEffect(() => {
@@ -164,23 +159,8 @@ function App() {
     }
   }, [currentAudioUrl])
 
-  const handleAuthSubmit = (event: FormEvent) => {
-    event.preventDefault()
-    if (!authEmailInput || !authPasswordInput) {
-      setAuthError('Vui lòng nhập đầy đủ Email và Mật khẩu')
-      return
-    }
-    if (authPasswordInput.length < 8) {
-      setAuthError('Mật khẩu tối thiểu 8 ký tự')
-      return
-    }
-    const mockSub = `us-east-1:${Math.random().toString(36).substring(2, 11)}`
-    setUserRole('user')
-    setUserEmail(authEmailInput)
-    setCognitoSub(mockSub)
-    setShowAuthModal(false)
-    setAuthError('')
-    if (ttsHistory.length === 0) {
+  useEffect(() => {
+    if (status === 'authenticated' && ttsHistory.length === 0) {
       setTtsHistory([
         {
           id: 'tts-101',
@@ -196,15 +176,22 @@ function App() {
         },
       ])
     }
-  }
+  }, [status, ttsHistory.length])
+
+  useEffect(() => {
+    if (
+      status === 'anonymous' &&
+      (activeTab === 'history' || activeTab === 'profile')
+    ) {
+      setActiveTab('tts')
+    }
+  }, [activeTab, status])
 
   const handleLogout = () => {
-    setUserRole('guest')
-    setUserEmail('')
-    setCognitoSub('')
     if (activeTab === 'profile') {
       setActiveTab('tts')
     }
+    logout()
   }
 
   const handleTextFileUpload = (event: ChangeEvent<HTMLInputElement>) => {
@@ -252,7 +239,7 @@ function App() {
             text_content: text,
             voice,
             engine,
-            audio_s3_key: `tts/${cognitoSub}/${now}.mp3`,
+            audio_s3_key: `tts/demo-authenticated-user/${now}.mp3`,
             audio_url: mockAudio,
             audio_file_size: Math.floor(text.length * 1250),
             created_at: now,
@@ -327,7 +314,7 @@ function App() {
           {
             id: `stt-${now}`,
             file_name: sttFile.name,
-            audio_s3_key: `stt/${cognitoSub}/${sttFile.name}`,
+            audio_s3_key: `stt/demo-authenticated-user/${sttFile.name}`,
             audio_file_size: sttFile.size,
             result_text: result,
             created_at: now,
@@ -350,6 +337,18 @@ function App() {
   const formatDate = (epoch: number) =>
     new Date(epoch).toLocaleString('vi-VN')
 
+  if (status === 'loading') {
+    return (
+      <div className="app-container">
+        <main className="main-content-layout" aria-live="polite">
+          <section className="glass-panel profile-container">
+            <h2>Đang khôi phục phiên đăng nhập</h2>
+          </section>
+        </main>
+      </div>
+    )
+  }
+
   return (
     <div className="app-container">
       {currentAudioUrl && (
@@ -361,10 +360,7 @@ function App() {
         userEmail={userEmail}
         historyCount={ttsHistory.length + sttHistory.length}
         onTabChange={setActiveTab}
-        onLogin={() => {
-          setShowAuthModal(true)
-          setAuthMode('login')
-        }}
+        onLogin={() => setShowAuthModal(true)}
         onLogout={handleLogout}
       />
       <main className="main-content-layout">
@@ -442,22 +438,14 @@ function App() {
           />
         )}
         {activeTab === 'profile' && userRole === 'user' && (
-          <ProfilePanel cognitoSub={cognitoSub} userEmail={userEmail} />
+          <ProfilePanel subject={user?.subject} userEmail={userEmail} />
         )}
       </main>
       {showAuthModal && (
         <AuthModal
-          mode={authMode}
-          email={authEmailInput}
-          password={authPasswordInput}
-          name={authNameInput}
-          error={authError}
           onClose={() => setShowAuthModal(false)}
-          onModeChange={setAuthMode}
-          onEmailChange={setAuthEmailInput}
-          onPasswordChange={setAuthPasswordInput}
-          onNameChange={setAuthNameInput}
-          onSubmit={handleAuthSubmit}
+          onLogin={() => void login()}
+          onRegister={() => void register()}
         />
       )}
     </div>
