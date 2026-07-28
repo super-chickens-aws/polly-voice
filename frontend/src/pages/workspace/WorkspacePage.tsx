@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import './index.css';
+import '../../@theme/styles/index.css';
 import {
   createStt,
   createTts,
@@ -9,7 +9,7 @@ import {
   fetchTtsHistory,
   type SttResult,
   type TtsResult
-} from './api';
+} from '../../shared/services/speech-api.service';
 import {
   confirmSignUp,
   currentUser,
@@ -17,34 +17,26 @@ import {
   signIn,
   signOut,
   signUp
-} from './auth';
+} from '../../security/cognito-auth.service';
+import { formatDuration } from '../../@core/utils/formatters';
+import type {
+  EngineType,
+  SttHistoryItem,
+  TabType,
+  TtsHistoryItem,
+  UserRole
+} from '../../shared/models/speech.models';
+import {
+  POLLY_VOICES,
+  STOCKHOLM_PRESET_OVERRIDES,
+  VOICE_PRESETS
+} from '../../shared/settings/voice.settings';
+import { SpeechToTextPage } from '../speech-to-text/SpeechToTextPage';
+import { ProfilePage } from '../profile/ProfilePage';
+import { HistoryPage } from '../history/HistoryPage';
+import { AuthenticatedOnly } from '../../guard/AuthenticatedOnly';
 
-// Types
-type EngineType = 'neural' | 'standard' | 'long-form';
-type TabType = 'tts' | 'stt' | 'history' | 'profile';
-type UserRole = 'guest' | 'user';
-
-interface TTSHistoryItem {
-  id: string;
-  text_content: string;
-  voice: string;
-  engine: EngineType;
-  audio_s3_key: string;
-  audio_url: string; // Blob or Pre-Signed URL for playback
-  audio_file_size: number;
-  created_at: number; // Epoch timestamp
-}
-
-interface STTHistoryItem {
-  id: string;
-  file_name: string;
-  audio_s3_key: string;
-  audio_file_size: number;
-  result_text: string;
-  created_at: number; // Epoch timestamp
-}
-
-function App() {
+function WorkspacePage() {
   // Navigation & User State
   const [activeTab, setActiveTab] = useState<TabType>('tts');
   const [userRole, setUserRole] = useState<UserRole>('guest');
@@ -90,52 +82,20 @@ function App() {
   const [sttResultText, setSttResultText] = useState('');
 
   // History State
-  const [ttsHistory, setTtsHistory] = useState<TTSHistoryItem[]>([]);
-  const [sttHistory, setSttHistory] = useState<STTHistoryItem[]>([]);
+  const [ttsHistory, setTtsHistory] = useState<TtsHistoryItem[]>([]);
+  const [sttHistory, setSttHistory] = useState<SttHistoryItem[]>([]);
   const [historyTab, setHistoryTab] = useState<'tts' | 'stt'>('tts');
   const [searchQuery, setSearchQuery] = useState('');
 
   // Character limit based on role
   const charLimit = userRole === 'user' ? 3000 : 500;
 
-  interface PresetItem {
-    id: string;
-    name: string;
-    desc: string;
-    voice?: string;
-    engine?: EngineType;
-    domain?: string;
-  }
-
-  // Presets definition
-  const presets: PresetItem[] = [
-    { id: 'none', name: 'Custom (No Preset)', desc: 'Adjust all voice settings manually' },
-    { id: 'deep_male', name: 'Deep Male', voice: 'Matthew', engine: 'neural', desc: 'Deep and authoritative male voice' },
-    { id: 'young_male', name: 'Young Male', voice: 'Kevin', engine: 'neural', desc: 'Young and energetic male voice' },
-    { id: 'soft_female', name: 'Soft Female', voice: 'Joanna', engine: 'neural', desc: 'Soft and gentle female voice' },
-    { id: 'expressive_female', name: 'Expressive Female', voice: 'Danielle', engine: 'long-form', desc: 'Expressive female storytelling voice' },
-    { id: 'mc', name: 'MC', voice: 'Stephen', engine: 'neural', desc: 'Clear voice for hosting and presenting' },
-    { id: 'podcast', name: 'Podcast', voice: 'Matthew', engine: 'neural', domain: 'conversational', desc: 'Natural podcast voice' },
-    { id: 'audiobook', name: 'Audiobook', voice: 'Joanna', engine: 'long-form', desc: 'Calm, slower-paced audiobook voice' }
-  ];
-
-  const voices = ['Joanna', 'Salli', 'Kendra', 'Kimberly', 'Ivy', 'Matthew', 'Justin', 'Joey', 'Amy', 'Emma', 'Brian'];
-  const stockholmPresetOverrides: Record<string, Pick<PresetItem, 'voice' | 'engine'>> = {
-    deep_male: { voice: 'Matthew', engine: 'standard' },
-    young_male: { voice: 'Justin', engine: 'standard' },
-    soft_female: { voice: 'Joanna', engine: 'standard' },
-    expressive_female: { voice: 'Salli', engine: 'standard' },
-    mc: { voice: 'Matthew', engine: 'standard' },
-    podcast: { voice: 'Matthew', engine: 'standard' },
-    audiobook: { voice: 'Joanna', engine: 'standard' }
-  };
-
   // Apply Preset
   useEffect(() => {
     if (preset !== 'none') {
-      const p = presets.find(item => item.id === preset);
+      const p = VOICE_PRESETS.find(item => item.id === preset);
       if (p) {
-        const effectivePreset = { ...p, ...stockholmPresetOverrides[p.id] };
+        const effectivePreset = { ...p, ...STOCKHOLM_PRESET_OVERRIDES[p.id] };
         if (effectivePreset.voice) setVoice(effectivePreset.voice);
         if (effectivePreset.engine) setEngine(effectivePreset.engine);
         if (p.domain) {
@@ -167,7 +127,7 @@ function App() {
     };
   }, [currentAudioUrl]);
 
-  const mapTtsHistory = (item: TtsResult): TTSHistoryItem => ({
+  const mapTtsHistory = (item: TtsResult): TtsHistoryItem => ({
     id: item.id,
     text_content: item.text,
     voice: item.voice,
@@ -178,7 +138,7 @@ function App() {
     created_at: new Date(item.createdAt).getTime()
   });
 
-  const mapSttHistory = (item: SttResult): STTHistoryItem => ({
+  const mapSttHistory = (item: SttResult): SttHistoryItem => ({
     id: item.id,
     file_name: item.fileName,
     audio_s3_key: item.id,
@@ -417,18 +377,6 @@ function App() {
     setSttHistory((previous) => previous.filter((item) => item.id !== id));
   };
 
-  // Format Helper
-  const formatTime = (seconds: number) => {
-    if (isNaN(seconds)) return '00:00';
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${mins < 10 ? '0' : ''}${mins}:${secs < 10 ? '0' : ''}${secs}`;
-  };
-
-  const formatDate = (epoch: number) => {
-    return new Date(epoch).toLocaleString('en-US');
-  };
-
   return (
     <div className="app-container">
       {/* Hidden Audio Element */}
@@ -564,7 +512,7 @@ function App() {
                         <span className={`bar ${isPlaying ? 'playing' : ''}`}></span>
                       </div>
                       <div className="time-display">
-                        {formatTime(audioCurrentTime)} / {formatTime(audioDuration)}
+                        {formatDuration(audioCurrentTime)} / {formatDuration(audioDuration)}
                       </div>
                     </div>
                     <a 
@@ -626,7 +574,7 @@ function App() {
               <div className="form-group">
                 <label>Voice Preset</label>
                 <select value={preset} onChange={(e) => setPreset(e.target.value)}>
-                  {presets.map(p => (
+                  {VOICE_PRESETS.map(p => (
                     <option key={p.id} value={p.id}>{p.name} — {p.desc}</option>
                   ))}
                 </select>
@@ -644,7 +592,7 @@ function App() {
                 <div>
                   <label>Voice</label>
                   <select value={voice} onChange={(e) => setVoice(e.target.value)}>
-                    {voices.map(v => (
+                    {POLLY_VOICES.map(v => (
                       <option key={v} value={v}>{v}</option>
                     ))}
                   </select>
@@ -734,169 +682,36 @@ function App() {
 
         {/* ================= TAB 2: SPEECH-TO-TEXT (STT) ================= */}
         {activeTab === 'stt' && (
-          <div className="stt-container glass-panel">
-            <h2>Speech to Text</h2>
-            <p className="subtitle">Supported audio formats: .mp3, .wav, .m4a, and .flac (10 MB maximum)</p>
-
-            <div className="stt-upload-box">
-              <label className="dropzone">
-                <span className="drop-icon">🎧</span>
-                <span>{sttFile ? `Selected: ${sttFile.name} (${(sttFile.size / 1024 / 1024).toFixed(2)} MB)` : 'Drag and drop an audio file here, or click to browse'}</span>
-                <input type="file" accept=".mp3,.wav,.m4a,.flac" onChange={handleSttFileUpload} hidden />
-              </label>
-
-              <button 
-                className="btn btn-primary btn-lg"
-                disabled={!sttFile || isTranscribing}
-                onClick={handleTranscribe}
-              >
-                {isTranscribing ? `⏳ Transcribing (${transcribeProgress}%)...` : '🎙️ Start Transcription'}
-              </button>
-            </div>
-
-            {isTranscribing && (
-              <div className="progress-bar-container">
-                <div className="progress-bar-fill" style={{ width: `${transcribeProgress}%` }} />
-              </div>
-            )}
-
-            {sttResultText && (
-              <div className="stt-result-card glass-subpanel">
-                <div className="result-header">
-                  <h3>Transcription Result</h3>
-                  <div className="result-actions">
-                    <button className="btn btn-secondary btn-sm" onClick={() => navigator.clipboard.writeText(sttResultText)}>
-                      📋 Copy Text
-                    </button>
-                    <a 
-                      href={`data:text/plain;charset=utf-8,${encodeURIComponent(sttResultText)}`} 
-                      download="transcribe_result.txt"
-                      className="btn btn-secondary btn-sm"
-                    >
-                      💾 Download .txt
-                    </a>
-                  </div>
-                </div>
-                <textarea className="result-textarea" readOnly value={sttResultText} />
-              </div>
-            )}
-          </div>
+          <SpeechToTextPage
+            file={sttFile}
+            isTranscribing={isTranscribing}
+            progress={transcribeProgress}
+            resultText={sttResultText}
+            onFileChange={handleSttFileUpload}
+            onTranscribe={handleTranscribe}
+          />
         )}
 
         {/* ================= TAB 3: HISTORY (USER ONLY) ================= */}
         {activeTab === 'history' && userRole === 'user' && (
-          <div className="history-container glass-panel">
-            <div className="history-header">
-              <h2>Conversion History (DynamoDB)</h2>
-              <div className="history-tab-buttons">
-                <button 
-                  className={`subtab-btn ${historyTab === 'tts' ? 'active' : ''}`}
-                  onClick={() => setHistoryTab('tts')}
-                >
-                  🗣️ TTS History ({ttsHistory.length})
-                </button>
-                <button 
-                  className={`subtab-btn ${historyTab === 'stt' ? 'active' : ''}`}
-                  onClick={() => setHistoryTab('stt')}
-                >
-                  🎙️ STT History ({sttHistory.length})
-                </button>
-              </div>
-            </div>
-
-            <div className="search-bar-row">
-              <input 
-                type="text" 
-                placeholder="🔍 Search history..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-              />
-            </div>
-
-            {historyTab === 'tts' && (
-              <div className="history-list">
-                {ttsHistory.length === 0 ? (
-                  <p className="empty-text">No TTS history has been saved yet.</p>
-                ) : (
-                  ttsHistory
-                    .filter(item => item.text_content.toLowerCase().includes(searchQuery.toLowerCase()))
-                    .map(item => (
-                      <div key={item.id} className="history-card glass-subpanel">
-                        <div className="card-top">
-                          <span className="badge badge-tag">{item.voice} ({item.engine})</span>
-                          <span className="timestamp">🕒 {formatDate(item.created_at)}</span>
-                        </div>
-                        <p className="card-text">{item.text_content}</p>
-                        <div className="card-bottom">
-                          <span className="s3-key">📦 S3 Key: <code>{item.audio_s3_key}</code></span>
-                          <div className="card-actions">
-                            <button className="btn btn-secondary btn-sm" onClick={() => togglePlayAudio(item.audio_url)}>
-                              ▶ Play Audio
-                            </button>
-                            <button className="btn btn-danger-link btn-sm" onClick={() => handleDeleteTtsHistory(item.id)}>
-                              🗑️ Soft Delete
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    ))
-                )}
-              </div>
-            )}
-
-            {historyTab === 'stt' && (
-              <div className="history-list">
-                {sttHistory.length === 0 ? (
-                  <p className="empty-text">No STT history has been saved yet.</p>
-                ) : (
-                  sttHistory
-                    .filter(item => item.result_text.toLowerCase().includes(searchQuery.toLowerCase()))
-                    .map(item => (
-                      <div key={item.id} className="history-card glass-subpanel">
-                        <div className="card-top">
-                          <span className="badge badge-tag">📁 {item.file_name}</span>
-                          <span className="timestamp">🕒 {formatDate(item.created_at)}</span>
-                        </div>
-                        <p className="card-text">{item.result_text}</p>
-                        <div className="card-bottom">
-                          <span className="s3-key">📦 S3 Key: <code>{item.audio_s3_key}</code></span>
-                          <div className="card-actions">
-                            <button className="btn btn-danger-link btn-sm" onClick={() => handleDeleteSttHistory(item.id)}>
-                              🗑️ Soft Delete
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    ))
-                )}
-              </div>
-            )}
-          </div>
+          <HistoryPage
+            activeType={historyTab}
+            query={searchQuery}
+            ttsItems={ttsHistory}
+            sttItems={sttHistory}
+            onTypeChange={setHistoryTab}
+            onQueryChange={setSearchQuery}
+            onPlay={togglePlayAudio}
+            onDeleteTts={handleDeleteTtsHistory}
+            onDeleteStt={handleDeleteSttHistory}
+          />
         )}
 
         {/* ================= TAB 4: PROFILE ================= */}
-        {activeTab === 'profile' && userRole === 'user' && (
-          <div className="profile-container glass-panel">
-            <h2>Cognito Account Information</h2>
-            <div className="profile-card">
-              <div className="profile-row">
-                <span className="label">Cognito Sub ID (PK):</span>
-                <code>{cognitoSub}</code>
-              </div>
-              <div className="profile-row">
-                <span className="label">Email:</span>
-                <span>{userEmail}</span>
-              </div>
-              <div className="profile-row">
-                <span className="label">Role:</span>
-                <span className="badge badge-user">Authenticated User</span>
-              </div>
-              <div className="profile-row">
-                <span className="label">TTS character limit:</span>
-                <span>3,000 characters per request</span>
-              </div>
-            </div>
-          </div>
+        {activeTab === 'profile' && (
+          <AuthenticatedOnly authenticated={userRole === 'user'}>
+            <ProfilePage cognitoSub={cognitoSub} email={userEmail} />
+          </AuthenticatedOnly>
         )}
 
       </main>
@@ -1000,4 +815,4 @@ function App() {
   );
 }
 
-export default App;
+export default WorkspacePage;

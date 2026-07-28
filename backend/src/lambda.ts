@@ -1,6 +1,6 @@
 import serverless from 'serverless-http';
 import { app } from './app.js';
-import { connectDatabase } from './db.js';
+import { connectDatabase } from './infrastructure/database/dynamodb.connection.js';
 
 const proxy = serverless(app);
 

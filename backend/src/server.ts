@@ -1,6 +1,6 @@
 import { app } from './app.js';
-import { config } from './config.js';
-import { connectDatabase } from './db.js';
+import { config } from './core/config/environment.js';
+import { connectDatabase } from './infrastructure/database/dynamodb.connection.js';
 
 await connectDatabase();
 app.listen(config.port, () => {

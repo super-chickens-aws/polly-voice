@@ -1,8 +1,8 @@
 import type { NextFunction, Request, Response } from 'express';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
-import { config } from './config.js';
-import { AppError } from './errors.js';
-import type { AuthenticatedRequest, UserIdentity } from './types.js';
+import { config } from '../core/config/environment.js';
+import { AppError } from '../core/http/errors.js';
+import type { AuthenticatedRequest, UserIdentity } from '../shared/types/http.js';
 
 const jwks = config.aws.cognitoIssuerUri
   ? createRemoteJWKSet(new URL(`${config.aws.cognitoIssuerUri}/.well-known/jwks.json`))

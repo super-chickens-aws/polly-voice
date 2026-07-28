@@ -6,8 +6,8 @@ import {
   QueryCommand,
   UpdateCommand
 } from '@aws-sdk/lib-dynamodb';
-import { config } from './config.js';
-import type { TtsEngine, TtsSettings } from './types.js';
+import { config } from '../../core/config/environment.js';
+import type { TtsEngine, TtsSettings } from '../../shared/types/http.js';
 
 type EntityType = 'TTS' | 'STT';
 

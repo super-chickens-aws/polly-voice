@@ -7,12 +7,12 @@ import {
   StartTranscriptionJobCommand,
   TranscribeClient
 } from '@aws-sdk/client-transcribe';
-import { requireAuth } from './auth.js';
-import { config } from './config.js';
-import { AppError } from './errors.js';
-import { mediaStorage } from './media.js';
-import { sttHistoryStore, type SttHistoryItem } from './models.js';
-import type { AuthenticatedRequest } from './types.js';
+import { requireAuth } from '../../security/cognito-auth.middleware.js';
+import { config } from '../../core/config/environment.js';
+import { AppError } from '../../core/http/errors.js';
+import { mediaStorage } from '../../infrastructure/storage/media.storage.js';
+import { sttHistoryStore, type SttHistoryItem } from '../../infrastructure/database/history.repository.js';
+import type { AuthenticatedRequest } from '../../shared/types/http.js';
 
 const upload = multer({
   storage: multer.memoryStorage(),

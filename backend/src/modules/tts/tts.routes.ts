@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { Router } from 'express';
 import { z } from 'zod';
-import { optionalAuth, requireAuth } from './auth.js';
-import { AppError } from './errors.js';
-import { mediaStorage } from './media.js';
-import { ttsHistoryStore, type TtsHistoryItem } from './models.js';
-import { speechService } from './speech.js';
-import type { AuthenticatedRequest, TtsSettings } from './types.js';
+import { optionalAuth, requireAuth } from '../../security/cognito-auth.middleware.js';
+import { AppError } from '../../core/http/errors.js';
+import { mediaStorage } from '../../infrastructure/storage/media.storage.js';
+import { ttsHistoryStore, type TtsHistoryItem } from '../../infrastructure/database/history.repository.js';
+import { speechService } from '../../infrastructure/aws/polly.service.js';
+import type { AuthenticatedRequest, TtsSettings } from '../../shared/types/http.js';
 
 const voices = ['Amy', 'Brian', 'Emma', 'Ivy', 'Joanna', 'Joey', 'Justin', 'Kendra', 'Kimberly', 'Matthew', 'Salli'];
 

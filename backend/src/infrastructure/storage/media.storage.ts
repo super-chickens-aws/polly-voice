@@ -7,8 +7,8 @@ import {
   S3Client
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { config } from './config.js';
-import { AppError } from './errors.js';
+import { config } from '../../core/config/environment.js';
+import { AppError } from '../../core/http/errors.js';
 
 export type StoredMedia = {
   key: string;

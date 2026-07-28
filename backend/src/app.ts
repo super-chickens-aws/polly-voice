@@ -3,11 +3,11 @@ import cors from 'cors';
 import express from 'express';
 import helmet from 'helmet';
 import morgan from 'morgan';
-import { config } from './config.js';
-import { errorHandler, notFoundHandler } from './errors.js';
-import { mediaStorage } from './media.js';
-import { sttRouter } from './stt.js';
-import { ttsRouter } from './tts.js';
+import { config } from './core/config/environment.js';
+import { errorHandler, notFoundHandler } from './core/http/errors.js';
+import { mediaStorage } from './infrastructure/storage/media.storage.js';
+import { sttRouter } from './modules/stt/stt.routes.js';
+import { ttsRouter } from './modules/tts/tts.routes.js';
 
 export const app = express();
 
