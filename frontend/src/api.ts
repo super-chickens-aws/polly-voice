@@ -67,7 +67,7 @@ export async function fetchTtsHistory(): Promise<TtsResult[]> {
 
 export async function deleteTtsHistory(id: string): Promise<void> {
   const response = await fetch(`${API_BASE_URL}/tts/${id}`, { method: 'DELETE', headers: authHeaders() });
-  if (!response.ok) throw new Error('Không thể xóa lịch sử TTS.');
+  if (!response.ok) throw new Error('Unable to delete TTS history.');
 }
 
 export async function createStt(file: File): Promise<SttResult> {
@@ -86,5 +86,5 @@ export async function fetchSttHistory(): Promise<SttResult[]> {
 
 export async function deleteSttHistory(id: string): Promise<void> {
   const response = await fetch(`${API_BASE_URL}/stt/${id}`, { method: 'DELETE', headers: authHeaders() });
-  if (!response.ok) throw new Error('Không thể xóa lịch sử STT.');
+  if (!response.ok) throw new Error('Unable to delete STT history.');
 }

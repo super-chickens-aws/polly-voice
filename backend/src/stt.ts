@@ -63,14 +63,14 @@ export const sttRouter = Router();
 
 sttRouter.post('/stt', requireAuth, upload.single('file'), async (req, res, next) => {
   try {
-    if (!req.file) throw new AppError(400, 'AUDIO_REQUIRED', 'Vui lòng chọn file MP3, WAV, M4A hoặc FLAC.');
+    if (!req.file) throw new AppError(400, 'AUDIO_REQUIRED', 'Please select an MP3, WAV, M4A, or FLAC file.');
     const user = (req as AuthenticatedRequest).user;
     const id = randomUUID();
     const extension = path.extname(req.file.originalname).toLowerCase().slice(1);
     const sourceKey = `stt/source/${user.id}/${id}.${extension}`;
     await mediaStorage.save(sourceKey, req.file.buffer, req.file.mimetype || 'application/octet-stream');
 
-    let resultText = `[Kết quả mô phỏng cho ${req.file.originalname}]\n\nNode.js backend đã nhận file thành công.`;
+    let resultText = `[Mock transcription for ${req.file.originalname}]\n\nThe Node.js backend received the file successfully.`;
     let resultStorageKey = `stt/result/${user.id}/${id}.txt`;
     let status = 'COMPLETED';
     let transcriptionJobName: string | undefined;
@@ -124,7 +124,7 @@ sttRouter.get('/stt/:id', requireAuth, async (req, res, next) => {
   try {
     const user = (req as AuthenticatedRequest).user;
     const doc = await sttHistoryStore.get(user.id, String(req.params.id));
-    if (!doc) throw new AppError(404, 'STT_NOT_FOUND', 'Không tìm thấy lịch sử STT.');
+    if (!doc) throw new AppError(404, 'STT_NOT_FOUND', 'The STT history item was not found.');
     res.json({ data: await sttResponse(doc) });
   } catch (error) { next(error); }
 });
@@ -133,7 +133,7 @@ sttRouter.get('/stt/:id/download', requireAuth, async (req, res, next) => {
   try {
     const user = (req as AuthenticatedRequest).user;
     const doc = await sttHistoryStore.get(user.id, String(req.params.id));
-    if (!doc?.resultStorageKey) throw new AppError(404, 'STT_RESULT_NOT_FOUND', 'Kết quả STT chưa sẵn sàng.');
+    if (!doc?.resultStorageKey) throw new AppError(404, 'STT_RESULT_NOT_FOUND', 'The STT result is not ready yet.');
     res.json({ data: { downloadUrl: await mediaStorage.downloadUrl(doc.resultStorageKey), expiresIn: 900 } });
   } catch (error) { next(error); }
 });
@@ -142,7 +142,7 @@ sttRouter.delete('/stt/:id', requireAuth, async (req, res, next) => {
   try {
     const user = (req as AuthenticatedRequest).user;
     const deleted = await sttHistoryStore.softDelete(user.id, String(req.params.id));
-    if (!deleted) throw new AppError(404, 'STT_NOT_FOUND', 'Không tìm thấy lịch sử STT.');
+    if (!deleted) throw new AppError(404, 'STT_NOT_FOUND', 'The STT history item was not found.');
     res.status(204).end();
   } catch (error) { next(error); }
 });

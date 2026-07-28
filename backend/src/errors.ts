@@ -12,7 +12,7 @@ export class AppError extends Error {
 }
 
 export function notFoundHandler(req: Request, _res: Response, next: NextFunction): void {
-  next(new AppError(404, 'ROUTE_NOT_FOUND', `Không tìm thấy ${req.method} ${req.path}`));
+  next(new AppError(404, 'ROUTE_NOT_FOUND', `Route ${req.method} ${req.path} was not found.`));
 }
 
 export function errorHandler(
@@ -29,7 +29,7 @@ export function errorHandler(
       timestamp: new Date().toISOString(),
       status: 400,
       code: 'VALIDATION_FAILED',
-      message: 'Dữ liệu gửi lên không hợp lệ.',
+      message: 'The submitted data is invalid.',
       fieldErrors
     });
     return;
@@ -49,7 +49,7 @@ export function errorHandler(
     timestamp: new Date().toISOString(),
     status: 500,
     code: 'INTERNAL_SERVER_ERROR',
-    message: 'Đã xảy ra lỗi trong quá trình xử lý.',
+    message: 'An error occurred while processing your request.',
     fieldErrors: {}
   });
 }

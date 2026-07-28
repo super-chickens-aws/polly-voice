@@ -109,14 +109,14 @@ function App() {
 
   // Presets definition
   const presets: PresetItem[] = [
-    { id: 'none', name: 'Custom (No Preset)', desc: 'Tự điều chỉnh các thông số' },
-    { id: 'deep_male', name: 'Deep Male', voice: 'Matthew', engine: 'neural', desc: 'Giọng nam trầm, uy quyền' },
-    { id: 'young_male', name: 'Young Male', voice: 'Kevin', engine: 'neural', desc: 'Giọng nam trẻ, năng động' },
-    { id: 'soft_female', name: 'Soft Female', voice: 'Joanna', engine: 'neural', desc: 'Giọng nữ nhẹ nhàng' },
-    { id: 'expressive_female', name: 'Expressive Female', voice: 'Danielle', engine: 'long-form', desc: 'Giọng nữ biểu cảm, đọc truyện' },
-    { id: 'mc', name: 'MC', voice: 'Stephen', engine: 'neural', desc: 'Giọng MC rõ ràng, dẫn chương trình' },
-    { id: 'podcast', name: 'Podcast', voice: 'Matthew', engine: 'neural', domain: 'conversational', desc: 'Giọng Podcast tự nhiên' },
-    { id: 'audiobook', name: 'Audiobook', voice: 'Joanna', engine: 'long-form', desc: 'Giọng đọc sách nhịp chậm' }
+    { id: 'none', name: 'Custom (No Preset)', desc: 'Adjust all voice settings manually' },
+    { id: 'deep_male', name: 'Deep Male', voice: 'Matthew', engine: 'neural', desc: 'Deep and authoritative male voice' },
+    { id: 'young_male', name: 'Young Male', voice: 'Kevin', engine: 'neural', desc: 'Young and energetic male voice' },
+    { id: 'soft_female', name: 'Soft Female', voice: 'Joanna', engine: 'neural', desc: 'Soft and gentle female voice' },
+    { id: 'expressive_female', name: 'Expressive Female', voice: 'Danielle', engine: 'long-form', desc: 'Expressive female storytelling voice' },
+    { id: 'mc', name: 'MC', voice: 'Stephen', engine: 'neural', desc: 'Clear voice for hosting and presenting' },
+    { id: 'podcast', name: 'Podcast', voice: 'Matthew', engine: 'neural', domain: 'conversational', desc: 'Natural podcast voice' },
+    { id: 'audiobook', name: 'Audiobook', voice: 'Joanna', engine: 'long-form', desc: 'Calm, slower-paced audiobook voice' }
   ];
 
   const voices = ['Joanna', 'Salli', 'Kendra', 'Kimberly', 'Ivy', 'Matthew', 'Justin', 'Joey', 'Amy', 'Emma', 'Brian'];
@@ -193,7 +193,7 @@ function App() {
       setTtsHistory(ttsItems.map(mapTtsHistory));
       setSttHistory(sttItems.map(mapSttHistory));
     } catch (error) {
-      console.error('Không thể tải lịch sử', error);
+      console.error('Unable to load history', error);
     }
   };
 
@@ -215,7 +215,7 @@ function App() {
 
     if (authMode === 'confirm') {
       if (!authEmailInput || !authConfirmationCode.trim()) {
-        setAuthError('Vui lòng nhập email và mã xác nhận.');
+        setAuthError('Please enter your email and confirmation code.');
         return;
       }
       setIsAuthSubmitting(true);
@@ -223,9 +223,9 @@ function App() {
         await confirmSignUp(authEmailInput, authConfirmationCode);
         setAuthMode('login');
         setAuthConfirmationCode('');
-        setAuthMessage('Xác nhận email thành công. Bạn có thể đăng nhập.');
+        setAuthMessage('Email confirmed successfully. You can now sign in.');
       } catch (error) {
-        setAuthError(error instanceof Error ? error.message : 'Không thể xác nhận tài khoản.');
+        setAuthError(error instanceof Error ? error.message : 'Unable to confirm the account.');
       } finally {
         setIsAuthSubmitting(false);
       }
@@ -233,11 +233,11 @@ function App() {
     }
 
     if (!authEmailInput || !authPasswordInput) {
-      setAuthError('Vui lòng nhập đầy đủ email và mật khẩu.');
+      setAuthError('Please enter both email and password.');
       return;
     }
     if (authPasswordInput.length < 8) {
-      setAuthError('Mật khẩu tối thiểu 8 ký tự.');
+      setAuthError('Password must contain at least 8 characters.');
       return;
     }
 
@@ -247,7 +247,7 @@ function App() {
         const result = await signUp(authNameInput, authEmailInput, authPasswordInput);
         if (result === 'confirmation-required') {
           setAuthMode('confirm');
-          setAuthMessage(`Mã xác nhận đã được gửi tới ${authEmailInput}.`);
+          setAuthMessage(`A confirmation code was sent to ${authEmailInput}.`);
           return;
         }
       }
@@ -259,10 +259,10 @@ function App() {
       setAuthError('');
       await loadHistory();
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Không thể đăng nhập.';
+      const message = error instanceof Error ? error.message : 'Unable to sign in.';
       if (message.toLowerCase().includes('not confirmed')) {
         setAuthMode('confirm');
-        setAuthMessage('Tài khoản chưa được xác nhận. Nhập mã trong email hoặc yêu cầu gửi lại mã.');
+        setAuthMessage('Your account is not confirmed. Enter the code from your email or request a new code.');
       } else {
         setAuthError(message);
       }
@@ -273,7 +273,7 @@ function App() {
 
   const handleResendConfirmationCode = async () => {
     if (!authEmailInput) {
-      setAuthError('Vui lòng nhập email.');
+      setAuthError('Please enter your email.');
       return;
     }
     setIsAuthSubmitting(true);
@@ -281,9 +281,9 @@ function App() {
     setAuthMessage('');
     try {
       await resendConfirmationCode(authEmailInput);
-      setAuthMessage(`Đã gửi lại mã xác nhận tới ${authEmailInput}.`);
+      setAuthMessage(`A new confirmation code was sent to ${authEmailInput}.`);
     } catch (error) {
-      setAuthError(error instanceof Error ? error.message : 'Không thể gửi lại mã xác nhận.');
+      setAuthError(error instanceof Error ? error.message : 'Unable to resend the confirmation code.');
     } finally {
       setIsAuthSubmitting(false);
     }
@@ -302,7 +302,7 @@ function App() {
     const file = e.target.files?.[0];
     if (file) {
       if (!file.name.endsWith('.txt')) {
-        alert('Chỉ hỗ trợ file .txt');
+        alert('Only .txt files are supported.');
         return;
       }
       const reader = new FileReader();
@@ -317,11 +317,11 @@ function App() {
   // Generate TTS
   const handleGenerateTTS = async (isPreview: boolean = false) => {
     if (!text.trim()) {
-      alert('Vui lòng nhập văn bản cần chuyển đổi!');
+      alert('Please enter the text you want to convert.');
       return;
     }
     if (text.length > charLimit) {
-      alert(`Đã vượt quá giới hạn ${charLimit} ký tự của tài khoản ${userRole.toUpperCase()}`);
+      alert(`You exceeded the ${charLimit}-character limit for the ${userRole.toUpperCase()} account.`);
       return;
     }
 
@@ -345,7 +345,7 @@ function App() {
       }
     } catch (error) {
       setIsGenerating(false);
-      alert(error instanceof Error ? error.message : 'Không thể tạo audio.');
+      alert(error instanceof Error ? error.message : 'Unable to generate audio.');
     }
   };
 
@@ -377,7 +377,7 @@ function App() {
     const file = e.target.files?.[0];
     if (file) {
       if (file.size > 10 * 1024 * 1024) {
-        alert('File vượt quá dung lượng tối đa 10MB');
+        alert('The file exceeds the 10 MB limit.');
         return;
       }
       setSttFile(file);
@@ -387,7 +387,7 @@ function App() {
 
   const handleTranscribe = async () => {
     if (!sttFile) {
-      alert('Vui lòng chọn file âm thanh!');
+      alert('Please select an audio file.');
       return;
     }
 
@@ -397,13 +397,13 @@ function App() {
       const result = await createStt(sttFile);
       setTranscribeProgress(100);
       setIsTranscribing(false);
-      setSttResultText(result.resultText || 'Job đang xử lý. Xem trạng thái trong lịch sử.');
+      setSttResultText(result.resultText || 'The job is processing. Check its status in History.');
       if (userRole === 'user') {
         setSttHistory((previous) => [mapSttHistory(result), ...previous]);
       }
     } catch (error) {
       setIsTranscribing(false);
-      alert(error instanceof Error ? error.message : 'Không thể xử lý audio.');
+      alert(error instanceof Error ? error.message : 'Unable to process the audio file.');
     }
   };
 
@@ -426,7 +426,7 @@ function App() {
   };
 
   const formatDate = (epoch: number) => {
-    return new Date(epoch).toLocaleString('vi-VN');
+    return new Date(epoch).toLocaleString('en-US');
   };
 
   return (
@@ -464,7 +464,7 @@ function App() {
               className={`nav-btn ${activeTab === 'history' ? 'active' : ''}`}
               onClick={() => setActiveTab('history')}
             >
-              📜 Lịch Sử ({ttsHistory.length + sttHistory.length})
+              📜 History ({ttsHistory.length + sttHistory.length})
             </button>
           )}
         </nav>
@@ -474,7 +474,7 @@ function App() {
             <div className="guest-badge-group">
               <span className="badge badge-guest">⚡ Guest Mode</span>
               <button className="btn btn-secondary btn-sm" onClick={() => { setShowAuthModal(true); setAuthMode('login'); }}>
-                🔑 Đăng Nhập
+                🔑 Sign In
               </button>
             </div>
           ) : (
@@ -484,7 +484,7 @@ function App() {
                 ⚙️ Profile
               </button>
               <button className="btn btn-danger-link btn-sm" onClick={handleLogout}>
-                Đăng Xuất
+                Sign Out
               </button>
             </div>
           )}
@@ -500,7 +500,7 @@ function App() {
             {/* Left Box: Text Input & Audio Player */}
             <div className="glass-panel input-panel">
               <div className="panel-header">
-                <h2>Văn Bản Đầu Vào</h2>
+                <h2>Input Text</h2>
                 <label className="file-upload-btn">
                   📁 Upload File .txt
                   <input type="file" accept=".txt" onChange={handleTextFileUpload} hidden />
@@ -509,7 +509,7 @@ function App() {
 
               <div className="form-group">
                 <textarea
-                  placeholder="Nhập nội dung tiếng Anh cần đọc tại đây..."
+                  placeholder="Enter the English text you want to synthesize..."
                   value={text}
                   onChange={(e) => setText(e.target.value)}
                   maxLength={charLimit}
@@ -521,13 +521,13 @@ function App() {
                       style={{ width: `${Math.min(100, (text.length / charLimit) * 100)}%` }}
                     />
                   </div>
-                  <span>{text.length} / {charLimit} ký tự ({userRole.toUpperCase()})</span>
+                  <span>{text.length} / {charLimit} characters ({userRole.toUpperCase()})</span>
                 </div>
               </div>
 
               {userRole === 'guest' && (
                 <div className="notice-banner">
-                  💡 Bạn đang ở chế độ <strong>Guest</strong> (giới hạn 500 ký tự & không lưu lịch sử). <span className="link-span" onClick={() => setShowAuthModal(true)}>Đăng nhập Cognito</span> để mở khóa 3,000 ký tự.
+                  💡 You are using <strong>Guest</strong> mode (500-character limit and no saved history). <span className="link-span" onClick={() => setShowAuthModal(true)}>Sign in with Cognito</span> to unlock 3,000 characters.
                 </div>
               )}
 
@@ -538,14 +538,14 @@ function App() {
                   disabled={isGenerating || !text.trim()}
                   onClick={() => handleGenerateTTS(true)}
                 >
-                  ▶ Nghe Thử Preview
+                  ▶ Preview
                 </button>
                 <button 
                   className="btn btn-primary"
                   disabled={isGenerating || !text.trim()}
                   onClick={() => handleGenerateTTS(false)}
                 >
-                  {isGenerating ? '⏳ Đang tổng hợp giọng đọc...' : '✨ Tạo Audio MP3'}
+                  {isGenerating ? '⏳ Generating speech...' : '✨ Generate MP3'}
                 </button>
               </div>
 
@@ -595,7 +595,7 @@ function App() {
 
             {/* Right Box: Settings */}
             <div className="glass-panel settings-panel">
-              <h2>Cấu Hình Giọng Đọc</h2>
+              <h2>Voice Configuration</h2>
 
               {/* Engine Tabs */}
               <div className="form-group">
@@ -624,7 +624,7 @@ function App() {
 
               {/* Preset Selector */}
               <div className="form-group">
-                <label>Cấu hình có sẵn (Preset)</label>
+                <label>Voice Preset</label>
                 <select value={preset} onChange={(e) => setPreset(e.target.value)}>
                   {presets.map(p => (
                     <option key={p.id} value={p.id}>{p.name} — {p.desc}</option>
@@ -635,14 +635,14 @@ function App() {
               {/* Language & Voice */}
               <div className="form-row form-group">
                 <div>
-                  <label>Ngôn ngữ</label>
+                  <label>Language</label>
                   <select value={language} onChange={(e) => setLanguage(e.target.value)}>
                     <option value="en-US">English (US)</option>
                     <option value="en-GB">English (UK)</option>
                   </select>
                 </div>
                 <div>
-                  <label>Giọng đọc (Voice)</label>
+                  <label>Voice</label>
                   <select value={voice} onChange={(e) => setVoice(e.target.value)}>
                     {voices.map(v => (
                       <option key={v} value={v}>{v}</option>
@@ -654,7 +654,7 @@ function App() {
               {/* Speed & Volume */}
               <div className="form-group slider-container">
                 <div className="slider-header">
-                  <label>Tốc độ đọc (Speed Rate)</label>
+                  <label>Speech Rate</label>
                   <span className="slider-value">{speed}%</span>
                 </div>
                 <input 
@@ -665,7 +665,7 @@ function App() {
 
               <div className="form-group slider-container">
                 <div className="slider-header">
-                  <label>Âm lượng (Volume)</label>
+                  <label>Volume</label>
                   <span className="slider-value">{volume > 0 ? `+${volume}` : volume} dB</span>
                 </div>
                 <input 
@@ -676,7 +676,7 @@ function App() {
 
               <div className="form-group slider-container">
                 <div className="slider-header">
-                  <label>Tạm dừng (Break Time)</label>
+                  <label>Break Time</label>
                   <span className="slider-value">{breakTime} ms</span>
                 </div>
                 <input 
@@ -686,12 +686,12 @@ function App() {
               </div>
 
               <hr className="divider" />
-              <h3>Thông Số SSML Nâng Cao</h3>
+              <h3>Advanced SSML Settings</h3>
 
               {/* Standard Engine Options */}
               <div className={`form-group slider-container ${engine !== 'standard' ? 'disabled-option' : ''}`}>
                 <div className="slider-header">
-                  <label>Cao độ giọng (Pitch)</label>
+                  <label>Pitch</label>
                   <span className="slider-value">{pitch > 0 ? `+${pitch}` : pitch}%</span>
                 </div>
                 <input 
@@ -699,34 +699,34 @@ function App() {
                   value={pitch} onChange={(e) => setPitch(Number(e.target.value))} 
                   disabled={engine !== 'standard'}
                 />
-                {engine !== 'standard' && <span className="helper-text">⚠️ Chỉ hỗ trợ cho Standard Engine</span>}
+                {engine !== 'standard' && <span className="helper-text">⚠️ Supported by the Standard engine only</span>}
               </div>
 
               <div className={`form-group ${engine !== 'standard' ? 'disabled-option' : ''}`}>
-                <label>Nhấn mạnh (Emphasis)</label>
+                <label>Emphasis</label>
                 <select 
                   value={emphasis} onChange={(e) => setEmphasis(e.target.value)}
                   disabled={engine !== 'standard'}
                 >
-                  <option value="none">Không nhấn mạnh</option>
-                  <option value="reduced">Giảm nhẹ (Reduced)</option>
-                  <option value="moderate">Vừa phải (Moderate)</option>
-                  <option value="strong">Mạnh mẽ (Strong)</option>
+                  <option value="none">None</option>
+                  <option value="reduced">Reduced</option>
+                  <option value="moderate">Moderate</option>
+                  <option value="strong">Strong</option>
                 </select>
               </div>
 
               {/* Neural Engine Option */}
               <div className={`form-group ${engine !== 'neural' ? 'disabled-option' : ''}`}>
-                <label>Phong cách đọc (Domain Style)</label>
+                <label>Domain Style</label>
                 <select 
                   value={domainStyle} onChange={(e) => setDomainStyle(e.target.value)}
                   disabled={engine !== 'neural'}
                 >
-                  <option value="none">Mặc định (Default)</option>
-                  <option value="news">Đọc tin tức (News)</option>
-                  <option value="conversational">Trò chuyện (Conversational)</option>
+                  <option value="none">Default</option>
+                  <option value="news">News</option>
+                  <option value="conversational">Conversational</option>
                 </select>
-                {engine !== 'neural' && <span className="helper-text">⚠️ Chỉ hỗ trợ cho Neural Engine</span>}
+                {engine !== 'neural' && <span className="helper-text">⚠️ Supported by the Neural engine only</span>}
               </div>
             </div>
           </div>
@@ -735,13 +735,13 @@ function App() {
         {/* ================= TAB 2: SPEECH-TO-TEXT (STT) ================= */}
         {activeTab === 'stt' && (
           <div className="stt-container glass-panel">
-            <h2>Chuyển Đổi Giọng Nói Thành Văn Bản (Speech-to-Text)</h2>
-            <p className="subtitle">Hỗ trợ các định dạng âm thanh .mp3, .wav, .m4a, .flac (Max 10MB)</p>
+            <h2>Speech to Text</h2>
+            <p className="subtitle">Supported audio formats: .mp3, .wav, .m4a, and .flac (10 MB maximum)</p>
 
             <div className="stt-upload-box">
               <label className="dropzone">
                 <span className="drop-icon">🎧</span>
-                <span>{sttFile ? `Đã chọn: ${sttFile.name} (${(sttFile.size / 1024 / 1024).toFixed(2)} MB)` : 'Kéo thả file audio vào đây hoặc click để chọn'}</span>
+                <span>{sttFile ? `Selected: ${sttFile.name} (${(sttFile.size / 1024 / 1024).toFixed(2)} MB)` : 'Drag and drop an audio file here, or click to browse'}</span>
                 <input type="file" accept=".mp3,.wav,.m4a,.flac" onChange={handleSttFileUpload} hidden />
               </label>
 
@@ -750,7 +750,7 @@ function App() {
                 disabled={!sttFile || isTranscribing}
                 onClick={handleTranscribe}
               >
-                {isTranscribing ? `⏳ Đang bóc băng (${transcribeProgress}%)...` : '🎙️ Bắt Đầu Nhận Dạng Văn Bản'}
+                {isTranscribing ? `⏳ Transcribing (${transcribeProgress}%)...` : '🎙️ Start Transcription'}
               </button>
             </div>
 
@@ -763,7 +763,7 @@ function App() {
             {sttResultText && (
               <div className="stt-result-card glass-subpanel">
                 <div className="result-header">
-                  <h3>Kết Quả Bóc Băng</h3>
+                  <h3>Transcription Result</h3>
                   <div className="result-actions">
                     <button className="btn btn-secondary btn-sm" onClick={() => navigator.clipboard.writeText(sttResultText)}>
                       📋 Copy Text
@@ -773,7 +773,7 @@ function App() {
                       download="transcribe_result.txt"
                       className="btn btn-secondary btn-sm"
                     >
-                      💾 Tải File .txt
+                      💾 Download .txt
                     </a>
                   </div>
                 </div>
@@ -787,19 +787,19 @@ function App() {
         {activeTab === 'history' && userRole === 'user' && (
           <div className="history-container glass-panel">
             <div className="history-header">
-              <h2>Lịch Sử Chuyển Đổi (MongoDB)</h2>
+              <h2>Conversion History (DynamoDB)</h2>
               <div className="history-tab-buttons">
                 <button 
                   className={`subtab-btn ${historyTab === 'tts' ? 'active' : ''}`}
                   onClick={() => setHistoryTab('tts')}
                 >
-                  🗣️ Lịch Sử TTS ({ttsHistory.length})
+                  🗣️ TTS History ({ttsHistory.length})
                 </button>
                 <button 
                   className={`subtab-btn ${historyTab === 'stt' ? 'active' : ''}`}
                   onClick={() => setHistoryTab('stt')}
                 >
-                  🎙️ Lịch Sử STT ({sttHistory.length})
+                  🎙️ STT History ({sttHistory.length})
                 </button>
               </div>
             </div>
@@ -807,7 +807,7 @@ function App() {
             <div className="search-bar-row">
               <input 
                 type="text" 
-                placeholder="🔍 Tìm kiếm nội dung..."
+                placeholder="🔍 Search history..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
@@ -816,7 +816,7 @@ function App() {
             {historyTab === 'tts' && (
               <div className="history-list">
                 {ttsHistory.length === 0 ? (
-                  <p className="empty-text">Chưa có lịch sử TTS nào được lưu.</p>
+                  <p className="empty-text">No TTS history has been saved yet.</p>
                 ) : (
                   ttsHistory
                     .filter(item => item.text_content.toLowerCase().includes(searchQuery.toLowerCase()))
@@ -847,7 +847,7 @@ function App() {
             {historyTab === 'stt' && (
               <div className="history-list">
                 {sttHistory.length === 0 ? (
-                  <p className="empty-text">Chưa có lịch sử STT nào được lưu.</p>
+                  <p className="empty-text">No STT history has been saved yet.</p>
                 ) : (
                   sttHistory
                     .filter(item => item.result_text.toLowerCase().includes(searchQuery.toLowerCase()))
@@ -877,7 +877,7 @@ function App() {
         {/* ================= TAB 4: PROFILE ================= */}
         {activeTab === 'profile' && userRole === 'user' && (
           <div className="profile-container glass-panel">
-            <h2>Thông Tin Tài Khoản Cognito</h2>
+            <h2>Cognito Account Information</h2>
             <div className="profile-card">
               <div className="profile-row">
                 <span className="label">Cognito Sub ID (PK):</span>
@@ -888,12 +888,12 @@ function App() {
                 <span>{userEmail}</span>
               </div>
               <div className="profile-row">
-                <span className="label">Vai trò (Role):</span>
+                <span className="label">Role:</span>
                 <span className="badge badge-user">Authenticated User</span>
               </div>
               <div className="profile-row">
-                <span className="label">Giới hạn ký tự TTS:</span>
-                <span>3,000 ký tự / lượt</span>
+                <span className="label">TTS character limit:</span>
+                <span>3,000 characters per request</span>
               </div>
             </div>
           </div>
@@ -907,9 +907,9 @@ function App() {
           <div className="modal-content glass-panel">
             <button className="modal-close" onClick={() => setShowAuthModal(false)}>✕</button>
             <h2>
-              {authMode === 'login' && '🔑 Đăng Nhập Amazon Cognito'}
-              {authMode === 'register' && '📝 Đăng Ký Tài Khoản'}
-              {authMode === 'confirm' && '✉️ Xác Nhận Email'}
+              {authMode === 'login' && '🔑 Sign In with Amazon Cognito'}
+              {authMode === 'register' && '📝 Create an Account'}
+              {authMode === 'confirm' && '✉️ Confirm Your Email'}
             </h2>
             
             {authError && <div className="auth-error">{authError}</div>}
@@ -918,10 +918,10 @@ function App() {
             <form onSubmit={handleAuthSubmit}>
               {authMode === 'register' && (
                 <div className="form-group">
-                  <label>Họ và tên</label>
+                  <label>Full name</label>
                   <input 
                     type="text" 
-                    placeholder="Nhập họ và tên" 
+                    placeholder="Enter your full name"
                     value={authNameInput} 
                     onChange={e => setAuthNameInput(e.target.value)} 
                   />
@@ -941,12 +941,12 @@ function App() {
 
               {authMode === 'confirm' ? (
                 <div className="form-group">
-                  <label>Mã xác nhận</label>
+                  <label>Confirmation code</label>
                   <input
                     type="text"
                     inputMode="numeric"
                     autoComplete="one-time-code"
-                    placeholder="Nhập mã trong email"
+                    placeholder="Enter the code from your email"
                     value={authConfirmationCode}
                     onChange={e => setAuthConfirmationCode(e.target.value)}
                     required
@@ -954,7 +954,7 @@ function App() {
                 </div>
               ) : (
                 <div className="form-group">
-                  <label>Mật khẩu (Tối thiểu 8 ký tự)</label>
+                  <label>Password (at least 8 characters)</label>
                   <input 
                     type="password" 
                     placeholder="••••••••" 
@@ -967,28 +967,28 @@ function App() {
 
               <button type="submit" className="btn btn-primary" disabled={isAuthSubmitting}>
                 {isAuthSubmitting
-                  ? 'Đang xử lý...'
+                  ? 'Processing...'
                   : authMode === 'login'
-                    ? 'Đăng Nhập'
+                    ? 'Sign In'
                     : authMode === 'register'
-                      ? 'Tạo Tài Khoản'
-                      : 'Xác Nhận Tài Khoản'}
+                      ? 'Create Account'
+                      : 'Confirm Account'}
               </button>
             </form>
 
             <div className="modal-footer">
               {authMode === 'login' ? (
-                <span>Chưa có tài khoản? <span className="link-span" onClick={() => { setAuthMode('register'); setAuthError(''); setAuthMessage(''); }}>Đăng ký ngay</span></span>
+                <span>New here? <span className="link-span" onClick={() => { setAuthMode('register'); setAuthError(''); setAuthMessage(''); }}>Create an account</span></span>
               ) : authMode === 'register' ? (
-                <span>Đã có tài khoản? <span className="link-span" onClick={() => { setAuthMode('login'); setAuthError(''); setAuthMessage(''); }}>Đăng nhập</span></span>
+                <span>Already have an account? <span className="link-span" onClick={() => { setAuthMode('login'); setAuthError(''); setAuthMessage(''); }}>Sign in</span></span>
               ) : (
                 <div className="confirmation-actions">
                   <button type="button" className="link-button" disabled={isAuthSubmitting} onClick={handleResendConfirmationCode}>
-                    Gửi lại mã
+                    Resend code
                   </button>
                   <span>·</span>
                   <button type="button" className="link-button" onClick={() => { setAuthMode('login'); setAuthError(''); setAuthMessage(''); }}>
-                    Quay lại đăng nhập
+                    Back to sign in
                   </button>
                 </div>
               )}

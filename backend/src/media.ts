@@ -43,7 +43,7 @@ class LocalMediaStorage implements MediaStorage {
     try {
       return await readFile(this.resolve(key));
     } catch {
-      throw new AppError(404, 'MEDIA_NOT_FOUND', 'Không tìm thấy file media.');
+      throw new AppError(404, 'MEDIA_NOT_FOUND', 'The media file was not found.');
     }
   }
 
@@ -58,7 +58,7 @@ class LocalMediaStorage implements MediaStorage {
   private resolve(key: string): string {
     const target = path.resolve(this.root, key);
     if (!target.startsWith(`${this.root}${path.sep}`)) {
-      throw new AppError(400, 'INVALID_MEDIA_KEY', 'Media key không hợp lệ.');
+      throw new AppError(400, 'INVALID_MEDIA_KEY', 'The media key is invalid.');
     }
     return target;
   }
@@ -88,7 +88,7 @@ class S3MediaStorage implements MediaStorage {
       Bucket: config.aws.bucket,
       Key: key
     }));
-    if (!response.Body) throw new AppError(404, 'MEDIA_NOT_FOUND', 'Không tìm thấy media.');
+    if (!response.Body) throw new AppError(404, 'MEDIA_NOT_FOUND', 'The media file was not found.');
     return Buffer.from(await response.Body.transformToByteArray());
   }
 

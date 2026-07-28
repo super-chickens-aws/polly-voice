@@ -82,7 +82,7 @@ class SpeechService {
       Engine: engine,
       LanguageCode: input.language as any
     }));
-    if (!response.AudioStream) throw new Error('Amazon Polly không trả về audio stream.');
+    if (!response.AudioStream) throw new Error('Amazon Polly did not return an audio stream.');
     return {
       body: Buffer.from(await response.AudioStream.transformToByteArray()),
       contentType: response.ContentType ?? 'audio/mpeg',

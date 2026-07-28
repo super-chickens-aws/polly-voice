@@ -19,9 +19,9 @@ async function identityFromRequest(req: Request): Promise<UserIdentity> {
       payload.aud === config.aws.cognitoClientId ||
       payload.client_id === config.aws.cognitoClientId;
     if (!audienceMatches) {
-      throw new AppError(401, 'INVALID_TOKEN', 'JWT không thuộc Cognito App Client đã cấu hình.');
+      throw new AppError(401, 'INVALID_TOKEN', 'The JWT does not belong to the configured Cognito app client.');
     }
-    if (!payload.sub) throw new AppError(401, 'INVALID_TOKEN', 'JWT không có subject.');
+    if (!payload.sub) throw new AppError(401, 'INVALID_TOKEN', 'The JWT does not contain a subject.');
     return {
       id: payload.sub,
       email: typeof payload.email === 'string' ? payload.email : undefined,
@@ -45,7 +45,7 @@ export async function optionalAuth(
     (req as AuthenticatedRequest).user = await identityFromRequest(req);
     next();
   } catch {
-    next(new AppError(401, 'UNAUTHORIZED', 'Token đăng nhập không hợp lệ.'));
+    next(new AppError(401, 'UNAUTHORIZED', 'The authentication token is invalid.'));
   }
 }
 
@@ -57,7 +57,7 @@ export async function requireAuth(
   await optionalAuth(req, res, (error?: unknown) => {
     if (error) return next(error);
     if (!(req as AuthenticatedRequest).user.authenticated) {
-      return next(new AppError(401, 'AUTH_REQUIRED', 'Endpoint này yêu cầu đăng nhập.'));
+      return next(new AppError(401, 'AUTH_REQUIRED', 'You must sign in to use this endpoint.'));
     }
     next();
   });

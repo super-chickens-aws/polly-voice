@@ -15,7 +15,7 @@ app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 app.use(cors({
   origin(origin, callback) {
     if (!origin || config.allowedOrigins.includes(origin)) return callback(null, true);
-    callback(new Error(`Origin ${origin} không được phép.`));
+    callback(new Error(`Origin ${origin} is not allowed.`));
   },
   exposedHeaders: ['Content-Disposition']
 }));

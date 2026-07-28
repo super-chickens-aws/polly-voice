@@ -22,7 +22,7 @@ const settingsSchema = z.object({
 const createSchema = z.object({
   text: z.string().trim().min(1).max(3000),
   language: z.string().default('en-US'),
-  voice: z.string().refine((value) => voices.includes(value), 'Giọng đọc không được hỗ trợ.'),
+  voice: z.string().refine((value) => voices.includes(value), 'This voice is not supported.'),
   engine: z.enum(['neural', 'standard', 'long-form']).default('neural'),
   outputFormat: z.literal('mp3').default('mp3'),
   preset: z.string().optional(),
@@ -59,10 +59,10 @@ async function createTts(req: AuthenticatedRequest, preview: boolean) {
   const input = createSchema.parse(req.body);
   const limit = preview || !req.user.authenticated ? 500 : 3000;
   if (input.text.length > limit) {
-    throw new AppError(400, 'TEXT_TOO_LONG', `Văn bản vượt quá giới hạn ${limit} ký tự.`);
+    throw new AppError(400, 'TEXT_TOO_LONG', `The text exceeds the ${limit}-character limit.`);
   }
   if (input.engine !== 'standard' && (input.settings.pitch !== 0 || input.settings.emphasis !== 'none')) {
-    throw new AppError(400, 'INVALID_ENGINE_SETTING', 'Pitch và emphasis chỉ hỗ trợ Standard Engine.');
+    throw new AppError(400, 'INVALID_ENGINE_SETTING', 'Pitch and emphasis are supported by the Standard engine only.');
   }
   const audio = await speechService.synthesize({
     text: input.text,
@@ -137,7 +137,7 @@ ttsRouter.get('/tts/:id', requireAuth, async (req, res, next) => {
   try {
     const user = (req as AuthenticatedRequest).user;
     const doc = await ttsHistoryStore.get(user.id, String(req.params.id));
-    if (!doc) throw new AppError(404, 'TTS_NOT_FOUND', 'Không tìm thấy lịch sử TTS.');
+    if (!doc) throw new AppError(404, 'TTS_NOT_FOUND', 'The TTS history item was not found.');
     res.json({ data: await responseFor(doc) });
   } catch (error) { next(error); }
 });
@@ -146,7 +146,7 @@ ttsRouter.get('/tts/:id/download', requireAuth, async (req, res, next) => {
   try {
     const user = (req as AuthenticatedRequest).user;
     const doc = await ttsHistoryStore.get(user.id, String(req.params.id));
-    if (!doc) throw new AppError(404, 'TTS_NOT_FOUND', 'Không tìm thấy lịch sử TTS.');
+    if (!doc) throw new AppError(404, 'TTS_NOT_FOUND', 'The TTS history item was not found.');
     res.json({ data: { downloadUrl: await mediaStorage.downloadUrl(doc.audioStorageKey), expiresIn: 900 } });
   } catch (error) { next(error); }
 });
@@ -155,7 +155,7 @@ ttsRouter.delete('/tts/:id', requireAuth, async (req, res, next) => {
   try {
     const user = (req as AuthenticatedRequest).user;
     const deleted = await ttsHistoryStore.softDelete(user.id, String(req.params.id));
-    if (!deleted) throw new AppError(404, 'TTS_NOT_FOUND', 'Không tìm thấy lịch sử TTS.');
+    if (!deleted) throw new AppError(404, 'TTS_NOT_FOUND', 'The TTS history item was not found.');
     res.status(204).end();
   } catch (error) { next(error); }
 });
