@@ -80,6 +80,7 @@ jobs:
           role-session-name: polly-voice-github-actions
           aws-region: ${{ env.AWS_REGION }}
           aws-profile: ${{ env.AWS_PROFILE }}
+          allowed-account-ids: "361226991327"
           output-env-credentials: true
 
       - name: Verify AWS identity
