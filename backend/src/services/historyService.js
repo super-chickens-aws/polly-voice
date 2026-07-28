@@ -1,34 +1,20 @@
-import {
-    DynamoDBClient
-} from "@aws-sdk/client-dynamodb";
-
-import {
-    DynamoDBDocumentClient,
-    PutCommand,
-    QueryCommand
-} from "@aws-sdk/lib-dynamodb";
-
-const client = new DynamoDBClient({
-    region: "ap-southeast-1"
-});
-
-const docClient = DynamoDBDocumentClient.from(client);
-
-const TABLE_NAME = "SpeechHistory";
+import { PutCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
+import { db } from "../config/dynamodb.js";
+import { TABLES } from "../constants/tables.js";
 
 export async function saveHistory(item) {
-    await docClient.send(
+    await db.send(
         new PutCommand({
-            TableName: TABLE_NAME,
+            TableName: TABLES.HISTORY,
             Item: item
         })
     );
 }
 
 export async function getHistory(userId) {
-    const result = await docClient.send(
+    const result = await db.send(
         new QueryCommand({
-            TableName: TABLE_NAME,
+            TableName: TABLES.HISTORY,
             KeyConditionExpression: "userId = :id",
             ExpressionAttributeValues: {
                 ":id": userId
@@ -37,5 +23,5 @@ export async function getHistory(userId) {
         })
     );
 
-    return result.Items || [];
+    return result.Items ?? [];
 }
