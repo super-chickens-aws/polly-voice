@@ -83,7 +83,7 @@ async function createTts(req: AuthenticatedRequest, preview: boolean) {
       textContent: input.text,
       language: input.language,
       voice: input.voice,
-      engine: input.engine,
+      engine: audio.engine,
       preset: input.preset,
       settings: input.settings,
       audioStorageKey: key,
@@ -100,7 +100,7 @@ async function createTts(req: AuthenticatedRequest, preview: boolean) {
     status: 'COMPLETED',
     text: input.text,
     voice: input.voice,
-    engine: input.engine,
+    engine: audio.engine,
     characterCount: input.text.length,
     media: { contentType: media.contentType, fileSize: media.size, downloadUrl: media.downloadUrl, expiresIn: 900 },
     createdAt

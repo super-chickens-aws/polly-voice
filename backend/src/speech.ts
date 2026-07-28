@@ -10,7 +10,12 @@ export type SynthesisInput = {
   settings: TtsSettings;
 };
 
-export type SynthesizedAudio = { body: Buffer; contentType: string; extension: string };
+export type SynthesizedAudio = {
+  body: Buffer;
+  contentType: string;
+  extension: string;
+  engine: TtsEngine;
+};
 
 function escapeXml(value: string): string {
   return value
@@ -60,21 +65,29 @@ class SpeechService {
 
   async synthesize(input: SynthesisInput): Promise<SynthesizedAudio> {
     if (!config.aws.enabled) {
-      return { body: createMockWave(input.text, input.voice), contentType: 'audio/wav', extension: 'wav' };
+      return {
+        body: createMockWave(input.text, input.voice),
+        contentType: 'audio/wav',
+        extension: 'wav',
+        engine: input.engine
+      };
     }
+    // eu-north-1 supports Polly Standard voices, but not Neural or Long-form.
+    const engine: TtsEngine = config.aws.region === 'eu-north-1' ? 'standard' : input.engine;
     const response = await this.polly.send(new SynthesizeSpeechCommand({
       Text: buildSsml(input),
       TextType: 'ssml',
       OutputFormat: 'mp3',
       VoiceId: input.voice as any,
-      Engine: input.engine,
+      Engine: engine,
       LanguageCode: input.language as any
     }));
     if (!response.AudioStream) throw new Error('Amazon Polly không trả về audio stream.');
     return {
       body: Buffer.from(await response.AudioStream.transformToByteArray()),
       contentType: response.ContentType ?? 'audio/mpeg',
-      extension: 'mp3'
+      extension: 'mp3',
+      engine
     };
   }
 }
