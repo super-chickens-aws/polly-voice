@@ -8,7 +8,7 @@ import { ttsHistoryStore, type TtsHistoryItem } from './models.js';
 import { speechService } from './speech.js';
 import type { AuthenticatedRequest, TtsSettings } from './types.js';
 
-const voices = ['Amy', 'Brian', 'Danielle', 'Emma', 'Joanna', 'Kevin', 'Matthew', 'Stephen'];
+const voices = ['Amy', 'Brian', 'Emma', 'Ivy', 'Joanna', 'Joey', 'Justin', 'Kendra', 'Kimberly', 'Matthew', 'Salli'];
 
 const settingsSchema = z.object({
   speed: z.number().min(20).max(200).default(100),

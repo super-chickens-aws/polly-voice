@@ -119,15 +119,25 @@ function App() {
     { id: 'audiobook', name: 'Audiobook', voice: 'Joanna', engine: 'long-form', desc: 'Giọng đọc sách nhịp chậm' }
   ];
 
-  const voices = ['Joanna', 'Matthew', 'Kevin', 'Danielle', 'Stephen', 'Amy', 'Emma', 'Brian'];
+  const voices = ['Joanna', 'Salli', 'Kendra', 'Kimberly', 'Ivy', 'Matthew', 'Justin', 'Joey', 'Amy', 'Emma', 'Brian'];
+  const stockholmPresetOverrides: Record<string, Pick<PresetItem, 'voice' | 'engine'>> = {
+    deep_male: { voice: 'Matthew', engine: 'standard' },
+    young_male: { voice: 'Justin', engine: 'standard' },
+    soft_female: { voice: 'Joanna', engine: 'standard' },
+    expressive_female: { voice: 'Salli', engine: 'standard' },
+    mc: { voice: 'Matthew', engine: 'standard' },
+    podcast: { voice: 'Matthew', engine: 'standard' },
+    audiobook: { voice: 'Joanna', engine: 'standard' }
+  };
 
   // Apply Preset
   useEffect(() => {
     if (preset !== 'none') {
       const p = presets.find(item => item.id === preset);
       if (p) {
-        if (p.voice) setVoice(p.voice);
-        if (p.engine) setEngine(p.engine);
+        const effectivePreset = { ...p, ...stockholmPresetOverrides[p.id] };
+        if (effectivePreset.voice) setVoice(effectivePreset.voice);
+        if (effectivePreset.engine) setEngine(effectivePreset.engine);
         if (p.domain) {
           setDomainStyle(p.domain);
         } else {
