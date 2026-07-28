@@ -107,7 +107,7 @@ Resources:
         Target: es2022
         Format: cjs
     Properties:
-      Handler: src/lambda.handler
+      Handler: lambda.handler
       Events:
         Root:
           Type: HttpApi
