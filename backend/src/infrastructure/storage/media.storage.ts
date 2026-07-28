@@ -3,6 +3,7 @@ import path from 'node:path';
 import {
   DeleteObjectCommand,
   GetObjectCommand,
+  HeadObjectCommand,
   PutObjectCommand,
   S3Client
 } from '@aws-sdk/client-s3';
@@ -21,6 +22,8 @@ export interface MediaStorage {
   save(key: string, body: Buffer, contentType: string): Promise<StoredMedia>;
   get(key: string): Promise<Buffer>;
   downloadUrl(key: string): Promise<string>;
+  uploadUrl(key: string, contentType: string): Promise<string | null>;
+  size(key: string): Promise<number>;
   delete(key: string): Promise<void>;
 }
 
@@ -49,6 +52,15 @@ class LocalMediaStorage implements MediaStorage {
 
   async downloadUrl(key: string): Promise<string> {
     return `${config.publicBaseUrl}/api/v1/media/${key}`;
+  }
+
+  async uploadUrl(): Promise<null> {
+    return null;
+  }
+
+  async size(key: string): Promise<number> {
+    const file = await readFile(this.resolve(key));
+    return file.byteLength;
   }
 
   async delete(key: string): Promise<void> {
@@ -98,6 +110,33 @@ class S3MediaStorage implements MediaStorage {
       new GetObjectCommand({ Bucket: config.aws.bucket, Key: key }),
       { expiresIn: config.aws.presignedUrlTtlSeconds }
     );
+  }
+
+  async uploadUrl(key: string, contentType: string): Promise<string> {
+    return getSignedUrl(
+      this.client,
+      new PutObjectCommand({
+        Bucket: config.aws.bucket,
+        Key: key,
+        ContentType: contentType
+      }),
+      {
+        expiresIn: config.aws.presignedUrlTtlSeconds,
+        signableHeaders: new Set(['content-type'])
+      }
+    );
+  }
+
+  async size(key: string): Promise<number> {
+    try {
+      const response = await this.client.send(new HeadObjectCommand({
+        Bucket: config.aws.bucket,
+        Key: key
+      }));
+      return response.ContentLength ?? 0;
+    } catch {
+      throw new AppError(404, 'MEDIA_NOT_FOUND', 'The uploaded audio file was not found.');
+    }
   }
 
   async delete(key: string): Promise<void> {

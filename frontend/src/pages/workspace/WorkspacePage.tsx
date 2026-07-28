@@ -336,8 +336,8 @@ function WorkspacePage() {
   const handleSttFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      if (file.size > 10 * 1024 * 1024) {
-        alert('The file exceeds the 10 MB limit.');
+      if (file.size > 2 * 1024 * 1024 * 1024) {
+        alert('The file exceeds the 2 GB Amazon Transcribe batch limit.');
         return;
       }
       setSttFile(file);
@@ -352,9 +352,9 @@ function WorkspacePage() {
     }
 
     setIsTranscribing(true);
-    setTranscribeProgress(30);
+    setTranscribeProgress(1);
     try {
-      const result = await createStt(sttFile);
+      const result = await createStt(sttFile, setTranscribeProgress);
       setTranscribeProgress(100);
       setIsTranscribing(false);
       setSttResultText(result.resultText || 'The job is processing. Check its status in History.');

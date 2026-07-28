@@ -20,13 +20,13 @@ export function SpeechToTextPage({
   return (
     <div className="stt-container glass-panel">
       <h2>Speech to Text</h2>
-      <p className="subtitle">Supported audio formats: .mp3, .wav, .m4a, and .flac (10 MB maximum)</p>
+      <p className="subtitle">Batch transcription supports MP3, MP4, WAV, FLAC, M4A, OGG, WebM, and AMR files up to 2 GB.</p>
 
       <div className="stt-upload-box">
         <label className="dropzone">
           <span className="drop-icon">🎧</span>
           <span>{file ? `Selected: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)` : 'Drag and drop an audio file here, or click to browse'}</span>
-          <input type="file" accept=".mp3,.wav,.m4a,.flac" onChange={onFileChange} hidden />
+          <input type="file" accept=".mp3,.mp4,.wav,.flac,.m4a,.ogg,.webm,.amr" onChange={onFileChange} hidden />
         </label>
 
         <button className="btn btn-primary btn-lg" disabled={!file || isTranscribing} onClick={onTranscribe}>

@@ -40,6 +40,14 @@ export type SttResult = {
   createdAt: string;
 };
 
+type SttUploadSession = {
+  directUpload: boolean;
+  uploadId?: string;
+  uploadUrl?: string;
+  expiresIn?: number;
+  maxFileSize?: number;
+};
+
 function authHeaders(): Record<string, string> {
   const accessToken = localStorage.getItem('access_token');
   if (accessToken) return { Authorization: `Bearer ${accessToken}` };
@@ -70,7 +78,7 @@ export async function deleteTtsHistory(id: string): Promise<void> {
   if (!response.ok) throw new Error('Unable to delete TTS history.');
 }
 
-export async function createStt(file: File): Promise<SttResult> {
+async function createSttLegacy(file: File): Promise<SttResult> {
   const form = new FormData();
   form.append('file', file);
   return parse<SttResult>(await fetch(`${API_BASE_URL}/stt`, {
@@ -78,6 +86,70 @@ export async function createStt(file: File): Promise<SttResult> {
     headers: authHeaders(),
     body: form
   }));
+}
+
+function uploadToS3(url: string, file: File, onProgress?: (progress: number) => void): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open('PUT', url);
+    request.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+    request.upload.onprogress = (event) => {
+      if (event.lengthComputable) onProgress?.(Math.round((event.loaded / event.total) * 60));
+    };
+    request.onload = () => {
+      if (request.status >= 200 && request.status < 300) resolve();
+      else reject(new Error(`S3 upload failed with status ${request.status}.`));
+    };
+    request.onerror = () => reject(new Error('The direct upload to Amazon S3 failed.'));
+    request.send(file);
+  });
+}
+
+export async function fetchStt(id: string): Promise<SttResult> {
+  return parse<SttResult>(await fetch(`${API_BASE_URL}/stt/${id}`, { headers: authHeaders() }));
+}
+
+export async function createStt(file: File, onProgress?: (progress: number) => void): Promise<SttResult> {
+  const session = await parse<SttUploadSession>(await fetch(`${API_BASE_URL}/stt/uploads`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({
+      fileName: file.name,
+      contentType: file.type || 'application/octet-stream',
+      fileSize: file.size
+    })
+  }));
+
+  if (!session.directUpload || !session.uploadId || !session.uploadUrl) {
+    return createSttLegacy(file);
+  }
+
+  await uploadToS3(session.uploadUrl, file, onProgress);
+  onProgress?.(65);
+  let result = await parse<SttResult>(await fetch(`${API_BASE_URL}/stt/jobs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({
+      uploadId: session.uploadId,
+      fileName: file.name,
+      fileSize: file.size
+    })
+  }));
+
+  for (let attempt = 0; result.status === 'PROCESSING' && attempt < 300; attempt += 1) {
+    onProgress?.(Math.min(95, 65 + Math.floor(attempt / 10)));
+    await new Promise((resolve) => window.setTimeout(resolve, 2000));
+    result = await fetchStt(result.id);
+  }
+
+  if (result.status === 'FAILED') {
+    throw new Error(result.resultText || 'Amazon Transcribe could not process this file.');
+  }
+  if (result.status !== 'COMPLETED') {
+    throw new Error('Transcription is taking longer than expected. You can check it later in History.');
+  }
+  onProgress?.(100);
+  return result;
 }
 
 export async function fetchSttHistory(): Promise<SttResult[]> {

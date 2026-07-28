@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { Router } from 'express';
 import multer from 'multer';
+import { z } from 'zod';
 import {
   GetTranscriptionJobCommand,
   StartTranscriptionJobCommand,
@@ -23,6 +24,32 @@ const upload = multer({
   }
 });
 const transcribe = new TranscribeClient({ region: config.aws.region });
+const MAX_STT_FILE_SIZE = 2 * 1024 * 1024 * 1024;
+const supportedExtensions = ['mp3', 'wav', 'm4a', 'flac', 'mp4', 'ogg', 'webm', 'amr'] as const;
+
+const uploadRequestSchema = z.object({
+  fileName: z.string().trim().min(1).max(255),
+  contentType: z.string().trim().min(1).max(100),
+  fileSize: z.number().int().positive().max(MAX_STT_FILE_SIZE)
+});
+
+const startJobSchema = z.object({
+  uploadId: z.string().uuid(),
+  fileName: z.string().trim().min(1).max(255),
+  fileSize: z.number().int().positive().max(MAX_STT_FILE_SIZE)
+});
+
+function extensionFor(fileName: string): typeof supportedExtensions[number] {
+  const extension = path.extname(fileName).toLowerCase().slice(1);
+  if (!supportedExtensions.includes(extension as typeof supportedExtensions[number])) {
+    throw new AppError(
+      400,
+      'UNSUPPORTED_AUDIO_FORMAT',
+      `Supported formats: ${supportedExtensions.join(', ')}.`
+    );
+  }
+  return extension as typeof supportedExtensions[number];
+}
 
 async function refreshAwsResult(document: SttHistoryItem): Promise<SttHistoryItem> {
   if (!config.aws.enabled || !document.transcriptionJobName || document.status === 'COMPLETED') return document;
@@ -31,15 +58,23 @@ async function refreshAwsResult(document: SttHistoryItem): Promise<SttHistoryIte
   }));
   const job = response.TranscriptionJob;
   if (job?.TranscriptionJobStatus === 'FAILED') {
-    return sttHistoryStore.update(document, { status: 'FAILED' });
+    return sttHistoryStore.update(document, {
+      status: 'FAILED',
+      resultText: job.FailureReason ?? 'Amazon Transcribe could not process this audio file.'
+    });
   }
   if (job?.TranscriptionJobStatus === 'COMPLETED' && document.resultStorageKey) {
-    const raw = await mediaStorage.get(document.resultStorageKey);
-    const json = JSON.parse(raw.toString('utf8'));
-    return sttHistoryStore.update(document, {
-      resultText: json.results?.transcripts?.[0]?.transcript ?? '',
-      status: 'COMPLETED'
-    });
+    try {
+      const raw = await mediaStorage.get(document.resultStorageKey);
+      const json = JSON.parse(raw.toString('utf8'));
+      return sttHistoryStore.update(document, {
+        resultText: json.results?.transcripts?.[0]?.transcript ?? '',
+        status: 'COMPLETED'
+      });
+    } catch {
+      // The Transcribe job can become complete just before its output object is visible in S3.
+      return document;
+    }
   }
   return document;
 }
@@ -60,6 +95,71 @@ async function sttResponse(input: SttHistoryItem) {
 }
 
 export const sttRouter = Router();
+
+sttRouter.post('/stt/uploads', requireAuth, async (req, res, next) => {
+  try {
+    if (!config.aws.enabled) {
+      res.json({ data: { directUpload: false } });
+      return;
+    }
+    const input = uploadRequestSchema.parse(req.body);
+    const extension = extensionFor(input.fileName);
+    const user = (req as AuthenticatedRequest).user;
+    const uploadId = randomUUID();
+    const sourceKey = `stt/source/${user.id}/${uploadId}.${extension}`;
+    const uploadUrl = await mediaStorage.uploadUrl(sourceKey, input.contentType);
+
+    res.json({
+      data: {
+        directUpload: true,
+        uploadId,
+        uploadUrl,
+        expiresIn: config.aws.presignedUrlTtlSeconds,
+        maxFileSize: MAX_STT_FILE_SIZE
+      }
+    });
+  } catch (error) { next(error); }
+});
+
+sttRouter.post('/stt/jobs', requireAuth, async (req, res, next) => {
+  try {
+    const input = startJobSchema.parse(req.body);
+    const extension = extensionFor(input.fileName);
+    const user = (req as AuthenticatedRequest).user;
+    const sourceKey = `stt/source/${user.id}/${input.uploadId}.${extension}`;
+    const uploadedSize = await mediaStorage.size(sourceKey);
+    if (uploadedSize !== input.fileSize) {
+      throw new AppError(400, 'UPLOAD_SIZE_MISMATCH', 'The uploaded file size does not match the selected file.');
+    }
+
+    const resultStorageKey = `stt/result/${user.id}/${input.uploadId}.json`;
+    const transcriptionJobName = `polly-voice-${input.uploadId}`;
+    await transcribe.send(new StartTranscriptionJobCommand({
+      TranscriptionJobName: transcriptionJobName,
+      LanguageCode: config.aws.transcribeLanguageCode as any,
+      Media: { MediaFileUri: `s3://${config.aws.bucket}/${sourceKey}` },
+      MediaFormat: extension,
+      OutputBucketName: config.aws.bucket,
+      OutputKey: resultStorageKey
+    }));
+
+    const createdAt = new Date().toISOString();
+    const document = await sttHistoryStore.create({
+      _id: input.uploadId,
+      userId: user.id,
+      fileName: input.fileName,
+      sourceStorageKey: sourceKey,
+      resultStorageKey,
+      resultText: '',
+      audioFileSize: uploadedSize,
+      transcriptionJobName,
+      status: 'PROCESSING',
+      createdAt,
+      updatedAt: createdAt
+    });
+    res.status(202).json({ data: await sttResponse(document) });
+  } catch (error) { next(error); }
+});
 
 sttRouter.post('/stt', requireAuth, upload.single('file'), async (req, res, next) => {
   try {
