@@ -68,6 +68,50 @@ Parameters:
     Default: ""
     Description: Optional email address subscribed to operational alarms.
 
+  SttInputRetentionDays:
+    Type: Number
+    Default: 14
+    MinValue: 1
+    Description: Days to retain STT source objects under input/stt/jobs/.
+
+  JobOutputRetentionDays:
+    Type: Number
+    Default: 35
+    MinValue: 1
+    Description: Must be at least JobTtlDays; retains TTS and STT job outputs.
+
+  IncompleteUploadAbortDays:
+    Type: Number
+    Default: 1
+    MinValue: 1
+    Description: Days before incomplete S3 multipart uploads are aborted.
+
+  TtsWorkerMaximumConcurrency:
+    Type: Number
+    Default: 5
+    MinValue: 1
+    MaxValue: 1000
+    Description: Maximum concurrent TTS worker invocations.
+
+  SttWorkerMaximumConcurrency:
+    Type: Number
+    Default: 3
+    MinValue: 1
+    MaxValue: 1000
+    Description: Maximum concurrent STT worker invocations.
+
+  PreviewRateLimit:
+    Type: Number
+    Default: 2
+    MinValue: 1
+    Description: Steady-state requests per second for POST /tts/preview.
+
+  PreviewBurstLimit:
+    Type: Number
+    Default: 5
+    MinValue: 1
+    Description: Burst request limit for POST /tts/preview.
+
 Conditions:
   MonitoringIsEnabled: !Equals
     - !Ref MonitoringEnabled
@@ -79,6 +123,12 @@ Conditions:
   CreateAlarmEmailSubscription: !And
     - !Condition MonitoringIsEnabled
     - !Condition HasAlarmEmail
+  TtsWorkerConcurrencyIsOne: !Equals
+    - !Ref TtsWorkerMaximumConcurrency
+    - 1
+  SttWorkerConcurrencyIsOne: !Equals
+    - !Ref SttWorkerMaximumConcurrency
+    - 1
 
 Rules:
   DeployOnlyInUsEast1:
@@ -283,6 +333,33 @@ Resources:
             ExpirationInDays: 30
             NoncurrentVersionExpiration:
               NoncurrentDays: 30
+          - Id: ExpireSttJobInputs
+            Prefix: input/stt/jobs/
+            Status: Enabled
+            ExpirationInDays: !Ref SttInputRetentionDays
+            NoncurrentVersionExpiration:
+              NoncurrentDays: !Ref SttInputRetentionDays
+          - Id: ExpireTtsJobOutputs
+            Prefix: output/tts/jobs/
+            Status: Enabled
+            ExpirationInDays: !Ref JobOutputRetentionDays
+            NoncurrentVersionExpiration:
+              NoncurrentDays: !Ref JobOutputRetentionDays
+          - Id: ExpireSttJobOutputs
+            Prefix: output/stt/jobs/
+            Status: Enabled
+            ExpirationInDays: !Ref JobOutputRetentionDays
+            NoncurrentVersionExpiration:
+              NoncurrentDays: !Ref JobOutputRetentionDays
+          - Id: AbortIncompleteMultipartUploads
+            Prefix: ""
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: !Ref IncompleteUploadAbortDays
+          - Id: RemoveExpiredDeleteMarkers
+            Prefix: ""
+            Status: Enabled
+            ExpiredObjectDeleteMarker: true
       Tags:
         - Key: Application
           Value: polly-voice
@@ -434,6 +511,12 @@ Resources:
           HttpMethod: "*"
           MetricsEnabled: true
           DataTraceEnabled: false
+        - ResourcePath: /~1tts~1preview
+          HttpMethod: POST
+          MetricsEnabled: true
+          DataTraceEnabled: false
+          ThrottlingRateLimit: !Ref PreviewRateLimit
+          ThrottlingBurstLimit: !Ref PreviewBurstLimit
       TracingEnabled: true
       Tags:
         Application: polly-voice
@@ -653,6 +736,10 @@ Resources:
       FunctionName: !Sub polly-voice-tts-worker-${Environment}
       CodeUri: src/tts_worker/
       Handler: app.lambda_handler
+      ReservedConcurrentExecutions: !If
+        - TtsWorkerConcurrencyIsOne
+        - 1
+        - !Ref AWS::NoValue
       Environment:
         Variables:
           ENVIRONMENT: !Ref Environment
@@ -705,6 +792,10 @@ Resources:
             BatchSize: 5
             FunctionResponseTypes:
               - ReportBatchItemFailures
+            ScalingConfig: !If
+              - TtsWorkerConcurrencyIsOne
+              - !Ref AWS::NoValue
+              - MaximumConcurrency: !Ref TtsWorkerMaximumConcurrency
 
   SttWorkerFunction:
     Type: AWS::Serverless::Function
@@ -712,6 +803,10 @@ Resources:
       FunctionName: !Sub polly-voice-stt-worker-${Environment}
       CodeUri: src/stt_worker/
       Handler: app.lambda_handler
+      ReservedConcurrentExecutions: !If
+        - SttWorkerConcurrencyIsOne
+        - 1
+        - !Ref AWS::NoValue
       Environment:
         Variables:
           ENVIRONMENT: !Ref Environment
@@ -756,6 +851,10 @@ Resources:
             BatchSize: 5
             FunctionResponseTypes:
               - ReportBatchItemFailures
+            ScalingConfig: !If
+              - SttWorkerConcurrencyIsOne
+              - !Ref AWS::NoValue
+              - MaximumConcurrency: !Ref SttWorkerMaximumConcurrency
 
   CompletionFunction:
     Type: AWS::Serverless::Function
@@ -1427,3 +1526,19 @@ Outputs:
     Description: CloudWatch operations dashboard name.
     Condition: MonitoringIsEnabled
     Value: !Ref OperationsDashboard
+
+  ConfiguredSttInputRetentionDays:
+    Description: Configured retention in days for STT source inputs.
+    Value: !Ref SttInputRetentionDays
+
+  ConfiguredJobOutputRetentionDays:
+    Description: Configured retention in days for TTS and STT job outputs.
+    Value: !Ref JobOutputRetentionDays
+
+  ConfiguredTtsWorkerMaximumConcurrency:
+    Description: Configured maximum concurrency for the TTS worker.
+    Value: !Ref TtsWorkerMaximumConcurrency
+
+  ConfiguredSttWorkerMaximumConcurrency:
+    Description: Configured maximum concurrency for the STT worker.
+    Value: !Ref SttWorkerMaximumConcurrency
