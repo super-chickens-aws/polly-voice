@@ -1,4 +1,4 @@
-﻿version = 0.1
+version = 0.1
 
 [dev.deploy.parameters]
 stack_name = "polly-voice-dev"
@@ -14,4 +14,3 @@ image_repositories = []
 
 [dev.global.parameters]
 region = "us-east-1"
-

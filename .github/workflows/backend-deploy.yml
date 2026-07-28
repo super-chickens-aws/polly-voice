@@ -20,7 +20,7 @@ concurrency:
 
 env:
   AWS_REGION: us-east-1
-  AWS_PROFILE: polly-dev
+  AWS_PROFILE_NAME: polly-dev
   STACK_NAME: polly-voice-dev
 
   PIPELINE_EXECUTION_ROLE: arn:aws:iam::361226991327:role/aws-sam-cli-managed-dev-pipel-PipelineExecutionRole-8sfEfH8yn8xq
@@ -68,10 +68,10 @@ jobs:
         run: ruff check .
 
       - name: Validate SAM template
-        run: sam validate --lint --region "$AWS_REGION"
+        run: sam validate --lint --template-file template.yaml --region "$AWS_REGION"
 
       - name: Build SAM application
-        run: sam build
+        run: sam build --template-file template.yaml
 
       - name: Configure temporary AWS credentials
         uses: aws-actions/configure-aws-credentials@v6.1.0
@@ -79,14 +79,14 @@ jobs:
           role-to-assume: ${{ env.PIPELINE_EXECUTION_ROLE }}
           role-session-name: polly-voice-github-actions
           aws-region: ${{ env.AWS_REGION }}
-          aws-profile: ${{ env.AWS_PROFILE }}
+          aws-profile: ${{ env.AWS_PROFILE_NAME }}
           allowed-account-ids: "361226991327"
           output-env-credentials: true
 
       - name: Verify AWS identity
         run: |
           aws sts get-caller-identity \
-            --profile "$AWS_PROFILE" \
+            --profile "$AWS_PROFILE_NAME" \
             --output table
 
       - name: Deploy backend
@@ -94,7 +94,7 @@ jobs:
           sam deploy \
             --config-file samconfig.toml \
             --config-env dev \
-            --profile "$AWS_PROFILE" \
+            --profile "$AWS_PROFILE_NAME" \
             --region "$AWS_REGION" \
             --stack-name "$STACK_NAME" \
             --s3-bucket "$ARTIFACTS_BUCKET" \
