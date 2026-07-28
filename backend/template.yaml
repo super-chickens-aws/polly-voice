@@ -55,6 +55,31 @@ Parameters:
     MaxValue: 365
     Description: Retention period used to calculate ConversionJobs expires_at.
 
+  MonitoringEnabled:
+    Type: String
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: Creates CloudWatch alarms, the operations topic, and dashboard.
+
+  AlarmEmail:
+    Type: String
+    Default: ""
+    Description: Optional email address subscribed to operational alarms.
+
+Conditions:
+  MonitoringIsEnabled: !Equals
+    - !Ref MonitoringEnabled
+    - "true"
+  HasAlarmEmail: !Not
+    - !Equals
+      - !Ref AlarmEmail
+      - ""
+  CreateAlarmEmailSubscription: !And
+    - !Condition MonitoringIsEnabled
+    - !Condition HasAlarmEmail
+
 Rules:
   DeployOnlyInUsEast1:
     Assertions:
@@ -333,6 +358,7 @@ Resources:
 
   OperationsTopic:
     Type: AWS::SNS::Topic
+    Condition: MonitoringIsEnabled
     Properties:
       TopicName: !Sub polly-voice-operations-${Environment}
       KmsMasterKeyId: alias/aws/sns
@@ -341,6 +367,14 @@ Resources:
           Value: polly-voice
         - Key: Environment
           Value: !Ref Environment
+
+  OperationsEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: CreateAlarmEmailSubscription
+    Properties:
+      TopicArn: !Ref OperationsTopic
+      Protocol: email
+      Endpoint: !Ref AlarmEmail
 
   ApiAccessLogGroup:
     Type: AWS::Logs::LogGroup
@@ -872,6 +906,7 @@ Resources:
 
   ApiFunctionErrorsAlarm:
     Type: AWS::CloudWatch::Alarm
+    Condition: MonitoringIsEnabled
     Properties:
       AlarmName: !Sub polly-voice-api-errors-${Environment}
       AlarmDescription: ApiFunction reported one or more errors.
@@ -881,7 +916,7 @@ Resources:
         - Name: FunctionName
           Value: !Ref ApiFunction
       Statistic: Sum
-      Period: 60
+      Period: 300
       EvaluationPeriods: 1
       DatapointsToAlarm: 1
       Threshold: 1
@@ -892,6 +927,7 @@ Resources:
 
   TtsWorkerFunctionErrorsAlarm:
     Type: AWS::CloudWatch::Alarm
+    Condition: MonitoringIsEnabled
     Properties:
       AlarmName: !Sub polly-voice-tts-worker-errors-${Environment}
       AlarmDescription: TtsWorkerFunction reported one or more errors.
@@ -901,7 +937,7 @@ Resources:
         - Name: FunctionName
           Value: !Ref TtsWorkerFunction
       Statistic: Sum
-      Period: 60
+      Period: 300
       EvaluationPeriods: 1
       DatapointsToAlarm: 1
       Threshold: 1
@@ -912,6 +948,7 @@ Resources:
 
   SttWorkerFunctionErrorsAlarm:
     Type: AWS::CloudWatch::Alarm
+    Condition: MonitoringIsEnabled
     Properties:
       AlarmName: !Sub polly-voice-stt-worker-errors-${Environment}
       AlarmDescription: SttWorkerFunction reported one or more errors.
@@ -921,7 +958,7 @@ Resources:
         - Name: FunctionName
           Value: !Ref SttWorkerFunction
       Statistic: Sum
-      Period: 60
+      Period: 300
       EvaluationPeriods: 1
       DatapointsToAlarm: 1
       Threshold: 1
@@ -932,6 +969,7 @@ Resources:
 
   CompletionFunctionErrorsAlarm:
     Type: AWS::CloudWatch::Alarm
+    Condition: MonitoringIsEnabled
     Properties:
       AlarmName: !Sub polly-voice-completion-errors-${Environment}
       AlarmDescription: CompletionFunction reported one or more errors.
@@ -941,7 +979,7 @@ Resources:
         - Name: FunctionName
           Value: !Ref CompletionFunction
       Statistic: Sum
-      Period: 60
+      Period: 300
       EvaluationPeriods: 1
       DatapointsToAlarm: 1
       Threshold: 1
@@ -952,6 +990,7 @@ Resources:
 
   TtsDeadLetterQueueAlarm:
     Type: AWS::CloudWatch::Alarm
+    Condition: MonitoringIsEnabled
     Properties:
       AlarmName: !Sub polly-voice-tts-dlq-messages-${Environment}
       AlarmDescription: The TTS dead-letter queue contains messages.
@@ -961,7 +1000,7 @@ Resources:
         - Name: QueueName
           Value: !GetAtt TtsDeadLetterQueue.QueueName
       Statistic: Maximum
-      Period: 60
+      Period: 300
       EvaluationPeriods: 1
       DatapointsToAlarm: 1
       Threshold: 1
@@ -972,6 +1011,7 @@ Resources:
 
   SttDeadLetterQueueAlarm:
     Type: AWS::CloudWatch::Alarm
+    Condition: MonitoringIsEnabled
     Properties:
       AlarmName: !Sub polly-voice-stt-dlq-messages-${Environment}
       AlarmDescription: The STT dead-letter queue contains messages.
@@ -981,7 +1021,7 @@ Resources:
         - Name: QueueName
           Value: !GetAtt SttDeadLetterQueue.QueueName
       Statistic: Maximum
-      Period: 60
+      Period: 300
       EvaluationPeriods: 1
       DatapointsToAlarm: 1
       Threshold: 1
@@ -989,6 +1029,340 @@ Resources:
       TreatMissingData: notBreaching
       AlarmActions:
         - !Ref OperationsTopic
+
+  ApiFunctionThrottlesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: MonitoringIsEnabled
+    Properties:
+      AlarmName: !Sub polly-voice-api-throttles-${Environment}
+      AlarmDescription: ApiFunction reported one or more throttled invocations.
+      Namespace: AWS/Lambda
+      MetricName: Throttles
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref ApiFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OperationsTopic
+
+  TtsWorkerFunctionThrottlesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: MonitoringIsEnabled
+    Properties:
+      AlarmName: !Sub polly-voice-tts-worker-throttles-${Environment}
+      AlarmDescription: TtsWorkerFunction reported throttled invocations.
+      Namespace: AWS/Lambda
+      MetricName: Throttles
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref TtsWorkerFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OperationsTopic
+
+  SttWorkerFunctionThrottlesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: MonitoringIsEnabled
+    Properties:
+      AlarmName: !Sub polly-voice-stt-worker-throttles-${Environment}
+      AlarmDescription: SttWorkerFunction reported throttled invocations.
+      Namespace: AWS/Lambda
+      MetricName: Throttles
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref SttWorkerFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OperationsTopic
+
+  CompletionFunctionThrottlesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: MonitoringIsEnabled
+    Properties:
+      AlarmName: !Sub polly-voice-completion-throttles-${Environment}
+      AlarmDescription: CompletionFunction reported throttled invocations.
+      Namespace: AWS/Lambda
+      MetricName: Throttles
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref CompletionFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OperationsTopic
+
+  TtsQueueOldestMessageAgeAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: MonitoringIsEnabled
+    Properties:
+      AlarmName: !Sub polly-voice-tts-queue-age-${Environment}
+      AlarmDescription: The oldest TTS processing message exceeds five minutes.
+      Namespace: AWS/SQS
+      MetricName: ApproximateAgeOfOldestMessage
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt TtsQueue.QueueName
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 300
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OperationsTopic
+
+  SttQueueOldestMessageAgeAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: MonitoringIsEnabled
+    Properties:
+      AlarmName: !Sub polly-voice-stt-queue-age-${Environment}
+      AlarmDescription: The oldest STT processing message exceeds five minutes.
+      Namespace: AWS/SQS
+      MetricName: ApproximateAgeOfOldestMessage
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt SttQueue.QueueName
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 300
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OperationsTopic
+
+  S3ObjectCreatedRuleFailedInvocationsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: MonitoringIsEnabled
+    Properties:
+      AlarmName: !Sub polly-voice-stt-upload-rule-failures-${Environment}
+      AlarmDescription: The STT upload EventBridge rule failed to invoke a target.
+      Namespace: AWS/Events
+      MetricName: FailedInvocations
+      Dimensions:
+        - Name: RuleName
+          Value: !Ref S3ObjectCreatedRule
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OperationsTopic
+
+  TranscribeJobStateRuleFailedInvocationsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: MonitoringIsEnabled
+    Properties:
+      AlarmName: !Sub polly-voice-transcribe-rule-failures-${Environment}
+      AlarmDescription: The Transcribe EventBridge rule failed to invoke a target.
+      Namespace: AWS/Events
+      MetricName: FailedInvocations
+      Dimensions:
+        - Name: RuleName
+          Value: !Ref TranscribeJobStateRule
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OperationsTopic
+
+  ApiGateway5xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: MonitoringIsEnabled
+    Properties:
+      AlarmName: !Sub polly-voice-api-5xx-${Environment}
+      AlarmDescription: The deployed REST API stage returned one or more 5XX errors.
+      Namespace: AWS/ApiGateway
+      MetricName: 5XXError
+      Dimensions:
+        - Name: ApiName
+          Value: !Sub polly-voice-${Environment}
+        - Name: Stage
+          Value: !Ref Environment
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OperationsTopic
+
+  OperationsDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Condition: MonitoringIsEnabled
+    Properties:
+      DashboardName: !Sub polly-voice-${Environment}-operations
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "API Gateway requests and errors",
+                "region": "${AWS::Region}",
+                "period": 300,
+                "stat": "Sum",
+                "view": "timeSeries",
+                "metrics": [
+                  ["AWS/ApiGateway", "Count", "ApiName", "polly-voice-${Environment}", "Stage", "${Environment}"],
+                  ["AWS/ApiGateway", "4XXError", "ApiName", "polly-voice-${Environment}", "Stage", "${Environment}"],
+                  ["AWS/ApiGateway", "5XXError", "ApiName", "polly-voice-${Environment}", "Stage", "${Environment}"]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "Lambda errors",
+                "region": "${AWS::Region}",
+                "period": 300,
+                "stat": "Sum",
+                "view": "timeSeries",
+                "metrics": [
+                  ["AWS/Lambda", "Errors", "FunctionName", "${ApiFunction}"],
+                  ["AWS/Lambda", "Errors", "FunctionName", "${TtsWorkerFunction}"],
+                  ["AWS/Lambda", "Errors", "FunctionName", "${SttWorkerFunction}"],
+                  ["AWS/Lambda", "Errors", "FunctionName", "${CompletionFunction}"]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 6,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "Lambda duration",
+                "region": "${AWS::Region}",
+                "period": 300,
+                "stat": "Average",
+                "view": "timeSeries",
+                "metrics": [
+                  ["AWS/Lambda", "Duration", "FunctionName", "${ApiFunction}"],
+                  ["AWS/Lambda", "Duration", "FunctionName", "${TtsWorkerFunction}"],
+                  ["AWS/Lambda", "Duration", "FunctionName", "${SttWorkerFunction}"],
+                  ["AWS/Lambda", "Duration", "FunctionName", "${CompletionFunction}"]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 6,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "Lambda throttles",
+                "region": "${AWS::Region}",
+                "period": 300,
+                "stat": "Sum",
+                "view": "timeSeries",
+                "metrics": [
+                  ["AWS/Lambda", "Throttles", "FunctionName", "${ApiFunction}"],
+                  ["AWS/Lambda", "Throttles", "FunctionName", "${TtsWorkerFunction}"],
+                  ["AWS/Lambda", "Throttles", "FunctionName", "${SttWorkerFunction}"],
+                  ["AWS/Lambda", "Throttles", "FunctionName", "${CompletionFunction}"]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 12,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "TTS processing queue",
+                "region": "${AWS::Region}",
+                "period": 300,
+                "view": "timeSeries",
+                "metrics": [
+                  ["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "${TtsQueue.QueueName}", {"stat": "Maximum"}],
+                  ["AWS/SQS", "ApproximateAgeOfOldestMessage", "QueueName", "${TtsQueue.QueueName}", {"stat": "Maximum", "yAxis": "right"}]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 12,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "Dead-letter queue messages",
+                "region": "${AWS::Region}",
+                "period": 300,
+                "stat": "Maximum",
+                "view": "timeSeries",
+                "metrics": [
+                  ["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "${TtsDeadLetterQueue.QueueName}"],
+                  ["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "${SttDeadLetterQueue.QueueName}"]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 18,
+              "width": 24,
+              "height": 6,
+              "properties": {
+                "title": "EventBridge failed invocations",
+                "region": "${AWS::Region}",
+                "period": 300,
+                "stat": "Sum",
+                "view": "timeSeries",
+                "metrics": [
+                  ["AWS/Events", "FailedInvocations", "RuleName", "${S3ObjectCreatedRule}"],
+                  ["AWS/Events", "FailedInvocations", "RuleName", "${TranscribeJobStateRule}"]
+                ]
+              }
+            }
+          ]
+        }
 
 Outputs:
   RestApiUrl:
@@ -1041,4 +1415,15 @@ Outputs:
 
   OperationsTopicArn:
     Description: Operations notification SNS topic ARN.
+    Condition: MonitoringIsEnabled
     Value: !Ref OperationsTopic
+
+  MonitoringTopicArn:
+    Description: SNS topic ARN used by CloudWatch operational alarms.
+    Condition: MonitoringIsEnabled
+    Value: !Ref OperationsTopic
+
+  CloudWatchDashboardName:
+    Description: CloudWatch operations dashboard name.
+    Condition: MonitoringIsEnabled
+    Value: !Ref OperationsDashboard
