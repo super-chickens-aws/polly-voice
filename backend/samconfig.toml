@@ -1,8 +1,9 @@
-version = 0.1
+﻿version = 0.1
 
 [dev.deploy.parameters]
 stack_name = "polly-voice-dev"
-resolve_s3 = true
+resolve_s3 = false
+s3_bucket = "aws-sam-cli-managed-dev-pipeline-r-artifactsbucket-e99bohqs3rlj"
 s3_prefix = "polly-voice-dev"
 region = "us-east-1"
 profile = "polly-dev"
@@ -13,3 +14,4 @@ image_repositories = []
 
 [dev.global.parameters]
 region = "us-east-1"
+

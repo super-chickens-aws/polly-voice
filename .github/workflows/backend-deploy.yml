@@ -1,0 +1,104 @@
+﻿name: Backend CI/CD
+
+on:
+  push:
+    branches:
+      - ductest
+    paths:
+      - "backend/**"
+      - ".github/workflows/backend-deploy.yml"
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: polly-voice-backend-dev
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  AWS_PROFILE: polly-dev
+  STACK_NAME: polly-voice-dev
+
+  PIPELINE_EXECUTION_ROLE: arn:aws:iam::361226991327:role/aws-sam-cli-managed-dev-pipel-PipelineExecutionRole-8sfEfH8yn8xq
+  CLOUDFORMATION_EXECUTION_ROLE: arn:aws:iam::361226991327:role/aws-sam-cli-managed-dev-p-CloudFormationExecutionRo-Bt9SAHXU2AfD
+  ARTIFACTS_BUCKET: aws-sam-cli-managed-dev-pipeline-r-artifactsbucket-e99bohqs3rlj
+
+  SAM_CLI_TELEMETRY: "0"
+
+jobs:
+  test-build-deploy:
+    name: Test, build and deploy backend
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up AWS SAM CLI
+        uses: aws-actions/setup-sam@v2
+
+      - name: Install test tools
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+
+          if [ -f requirements-dev.txt ]; then
+            python -m pip install -r requirements-dev.txt
+          fi
+
+          python -m pip install pytest ruff boto3
+
+      - name: Run unit tests
+        run: pytest -q
+
+      - name: Run Ruff
+        run: ruff check .
+
+      - name: Validate SAM template
+        run: sam validate --lint --region "$AWS_REGION"
+
+      - name: Build SAM application
+        run: sam build
+
+      - name: Configure temporary AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6.1.0
+        with:
+          role-to-assume: ${{ env.PIPELINE_EXECUTION_ROLE }}
+          role-session-name: polly-voice-github-actions
+          aws-region: ${{ env.AWS_REGION }}
+          aws-profile: ${{ env.AWS_PROFILE }}
+          output-env-credentials: true
+
+      - name: Verify AWS identity
+        run: |
+          aws sts get-caller-identity \
+            --profile "$AWS_PROFILE" \
+            --output table
+
+      - name: Deploy backend
+        run: |
+          sam deploy \
+            --config-file samconfig.toml \
+            --config-env dev \
+            --profile "$AWS_PROFILE" \
+            --region "$AWS_REGION" \
+            --stack-name "$STACK_NAME" \
+            --s3-bucket "$ARTIFACTS_BUCKET" \
+            --s3-prefix "$STACK_NAME" \
+            --role-arn "$CLOUDFORMATION_EXECUTION_ROLE" \
+            --capabilities CAPABILITY_IAM \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset
