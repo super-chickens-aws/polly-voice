@@ -4,35 +4,126 @@
 
 - Nhập văn bản, chọn giọng/engine/tốc độ và nghe thử.
 - Tạo, phát và tải file âm thanh.
-- Tải file MP3, WAV, M4A hoặc FLAC để nhận dạng lời nói.
+- Tải file MP3, MP4, WAV, FLAC, M4A, OGG, WebM hoặc AMR để nhận dạng lời nói.
 - Đăng ký/đăng nhập và lưu lịch sử riêng cho từng người dùng.
 - Chạy hoàn toàn ở máy cá nhân hoặc sử dụng dịch vụ AWS tại `eu-north-1`.
 
 ## 1. Kiến trúc
 
+### 1.1 Kiến trúc tổng thể trên AWS
+
 ```mermaid
-flowchart LR
-  U["Người dùng"] --> R["React + Vite"]
-  R --> A["Node.js + Express API"]
-  A --> D[("Amazon DynamoDB")]
-  A --> P["Amazon Polly"]
-  A --> T["Amazon Transcribe"]
-  A --> S["Amazon S3"]
-  R --> C["Amazon Cognito"]
-  A --> C
-  A -. "AWS SAM" .-> L["Lambda + API Gateway"]
+flowchart TB
+  User(["Người dùng"])
+
+  subgraph Frontend["Frontend"]
+    Amplify["AWS Amplify Hosting"]
+    React["React 19 + Vite + TypeScript"]
+    Amplify --> React
+  end
+
+  subgraph Security["Xác thực"]
+    Cognito["Amazon Cognito User Pool"]
+  end
+
+  subgraph Backend["Backend serverless"]
+    Gateway["Amazon API Gateway HTTP API"]
+    Lambda["AWS Lambda<br/>Node.js + Express"]
+    Gateway --> Lambda
+  end
+
+  subgraph Data["Dữ liệu và media"]
+    DynamoDB[("Amazon DynamoDB<br/>Lịch sử TTS/STT")]
+    S3[("Amazon S3<br/>Audio và transcript")]
+  end
+
+  subgraph AI["Dịch vụ AI"]
+    Polly["Amazon Polly"]
+    Transcribe["Amazon Transcribe<br/>Batch transcription"]
+  end
+
+  User -->|HTTPS| Amplify
+  React -->|Đăng ký / đăng nhập| Cognito
+  React -->|REST API + Cognito JWT| Gateway
+  Lambda -->|Xác minh JWT qua JWKS| Cognito
+  Lambda --> DynamoDB
+  Lambda --> Polly
+  Lambda --> Transcribe
+  Lambda -->|Presigned GET/PUT URL| S3
+  React -->|Upload trực tiếp bằng presigned PUT| S3
+  Transcribe -->|Đọc audio / ghi JSON| S3
+```
+
+### 1.2 Luồng Text-to-Speech
+
+```mermaid
+sequenceDiagram
+  actor U as Người dùng
+  participant R as React / Amplify
+  participant A as API Gateway
+  participant L as Lambda / Express
+  participant P as Amazon Polly
+  participant S as Amazon S3
+  participant D as DynamoDB
+
+  U->>R: Nhập văn bản và chọn giọng
+  R->>A: POST /api/v1/tts
+  A->>L: Chuyển request + Cognito JWT
+  L->>P: SynthesizeSpeech
+  P-->>L: Audio MP3
+  L->>S: Lưu audio
+  L->>D: Lưu lịch sử và trạng thái
+  L-->>R: Presigned download URL
+  R-->>U: Nghe thử hoặc tải MP3
+```
+
+### 1.3 Luồng Speech-to-Text
+
+File audio không đi xuyên qua API Gateway hoặc Lambda. Frontend upload trực tiếp
+vào private S3 bucket để tránh giới hạn payload của API Gateway/Lambda.
+
+```mermaid
+sequenceDiagram
+  actor U as Người dùng
+  participant R as React / Amplify
+  participant A as API Gateway
+  participant L as Lambda / Express
+  participant S as Amazon S3
+  participant T as Amazon Transcribe
+  participant D as DynamoDB
+
+  U->>R: Chọn file audio (tối đa 2 GB)
+  R->>A: POST /api/v1/stt/uploads
+  A->>L: Yêu cầu URL upload
+  L-->>R: Presigned S3 PUT URL
+  R->>S: PUT file trực tiếp
+  R->>A: POST /api/v1/stt/jobs
+  A->>L: Tạo transcription job
+  L->>S: Kiểm tra file và kích thước
+  L->>T: StartTranscriptionJob
+  L->>D: Lưu trạng thái PROCESSING
+  loop Poll mỗi 2 giây
+    R->>A: GET /api/v1/stt/:id
+    A->>L: Kiểm tra trạng thái
+    L->>T: GetTranscriptionJob
+  end
+  T->>S: Ghi kết quả JSON
+  L->>S: Đọc transcript
+  L->>D: Cập nhật COMPLETED
+  L-->>R: Trả nội dung văn bản
+  R-->>U: Hiển thị / copy / tải kết quả
 ```
 
 | Thành phần | Công nghệ | Vai trò |
 |---|---|---|
-| Frontend | React 19, TypeScript, Vite | Giao diện TTS, STT, đăng nhập và lịch sử |
-| Backend | Node.js 20+, Express, TypeScript | REST API, xác thực, điều phối AWS |
+| Frontend | React 19, TypeScript, Vite, Amplify Hosting | Giao diện TTS, STT, đăng nhập và lịch sử |
+| Backend | Node.js 22, Express, TypeScript, Lambda | REST API, xác thực và điều phối AWS |
 | Database | Amazon DynamoDB (on-demand) | Lưu lịch sử và trạng thái xử lý |
-| Media | Ổ đĩa local / Amazon S3 | Lưu audio và kết quả STT |
-| TTS | Bộ tạo WAV giả lập / Amazon Polly | Sinh âm thanh |
-| STT | Kết quả giả lập / Amazon Transcribe | Chuyển audio thành text |
+| Media | Ổ đĩa local / private Amazon S3 | Lưu audio và transcript; cấp presigned URL |
+| TTS | Bộ tạo WAV local / Amazon Polly | Sinh âm thanh |
+| STT | Kết quả local / Amazon Transcribe Batch | Chuyển audio thành text, hỗ trợ file đến 2 GB |
 | Auth | `X-User-Id` local / Amazon Cognito | Xác thực người dùng |
-| Deploy API | AWS SAM, Lambda, HTTP API | Chạy backend serverless |
+| Hạ tầng | AWS SAM, CloudFormation, API Gateway | Triển khai backend serverless |
 
 ## 2. Các trang
 
@@ -49,25 +140,39 @@ flowchart LR
 polly-voice/
 ├─ frontend/
 │  ├─ src/
-│  │  ├─ App.tsx            # UI và luồng chính
-│  │  ├─ api.ts             # REST client
-│  │  ├─ auth.ts            # Local auth / Cognito
-│  │  └─ index.css          # Giao diện responsive
+│  │  ├─ @core/             # Helper và formatter độc lập
+│  │  ├─ @theme/            # Theme và style dùng chung
+│  │  ├─ guard/             # Bảo vệ nội dung yêu cầu đăng nhập
+│  │  ├─ pages/
+│  │  │  ├─ history/        # Lịch sử TTS/STT
+│  │  │  ├─ profile/        # Hồ sơ Cognito
+│  │  │  ├─ speech-to-text/ # Màn hình STT
+│  │  │  └─ workspace/      # Điều phối dashboard
+│  │  ├─ security/          # Cognito authentication
+│  │  └─ shared/
+│  │     ├─ models/         # Interface và type
+│  │     ├─ services/       # REST client và S3 upload
+│  │     └─ settings/       # Preset và cấu hình giọng
 │  ├─ .env.example
 │  └─ package.json
 ├─ backend/
 │  ├─ src/
-│  │  ├─ app.ts             # Express application
-│  │  ├─ server.ts          # Local server
-│  │  ├─ lambda.ts          # AWS Lambda entry
-│  │  ├─ auth.ts            # JWT Cognito / local auth
-│  │  ├─ models.ts          # DynamoDB repository
-│  │  ├─ speech.ts          # Polly / mock TTS
-│  │  ├─ media.ts           # S3 / local storage
-│  │  ├─ tts.ts             # TTS endpoints
-│  │  └─ stt.ts             # Transcribe endpoints
+│  │  ├─ core/              # Environment và HTTP error
+│  │  ├─ infrastructure/
+│  │  │  ├─ aws/            # Amazon Polly
+│  │  │  ├─ database/       # DynamoDB repository
+│  │  │  └─ storage/        # Local/S3 media storage
+│  │  ├─ modules/
+│  │  │  ├─ tts/            # TTS routes và workflow
+│  │  │  └─ stt/            # S3 upload và Transcribe workflow
+│  │  ├─ security/          # Cognito JWT middleware
+│  │  ├─ shared/            # Type dùng chung
+│  │  ├─ app.ts             # Express composition root
+│  │  ├─ server.ts          # Local entry point
+│  │  └─ lambda.ts          # Lambda entry point
 │  ├─ template.yaml         # AWS SAM
 │  └─ .env.example
+├─ ARCHITECTURE.md
 └─ README.md
 ```
 
@@ -85,7 +190,9 @@ Base URL local: `http://localhost:8080/api/v1`
 | GET | `/api/v1/tts/:id` | Có | Chi tiết một bản ghi |
 | GET | `/api/v1/tts/:id/download` | Có | URL tải có thời hạn |
 | DELETE | `/api/v1/tts/:id` | Có | Xóa mềm bản ghi |
-| POST | `/api/v1/stt` | Có | Upload `multipart/form-data`, field `file` |
+| POST | `/api/v1/stt/uploads` | Có | Tạo presigned URL để upload trực tiếp vào S3 |
+| POST | `/api/v1/stt/jobs` | Có | Bắt đầu Amazon Transcribe sau khi upload |
+| POST | `/api/v1/stt` | Có | Upload multipart dự phòng khi chạy local |
 | GET | `/api/v1/stt/history` | Có | Danh sách và cập nhật trạng thái STT |
 | GET | `/api/v1/stt/:id` | Có | Chi tiết/kết quả STT |
 | GET | `/api/v1/stt/:id/download` | Có | URL tải kết quả |
