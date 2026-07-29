@@ -44,7 +44,7 @@ function WorkspacePage() {
   const [cognitoSub, setCognitoSub] = useState<string>('');
   const [showAuthModal, setShowAuthModal] = useState<boolean>(false);
   const [authMode, setAuthMode] = useState<'login' | 'register' | 'confirm'>('login');
-  
+
   // Auth Form State
   const [authEmailInput, setAuthEmailInput] = useState('');
   const [authPasswordInput, setAuthPasswordInput] = useState('');
@@ -390,25 +390,25 @@ function WorkspacePage() {
           <div className="logo-icon">🎙️</div>
           <div>
             <h1 className="logo-title">Polly Voice</h1>
-            <span className="logo-subtitle">AWS Serverless Text-to-Speech & Speech-to-Text</span>
+            {/* <span className="logo-subtitle">AWS Serverless Text-to-Speech & Speech-to-Text</span> */}
           </div>
         </div>
 
         <nav className="nav-tabs">
-          <button 
+          <button
             className={`nav-btn ${activeTab === 'tts' ? 'active' : ''}`}
             onClick={() => setActiveTab('tts')}
           >
             🗣️ Text-to-Speech
           </button>
-          <button 
+          <button
             className={`nav-btn ${activeTab === 'stt' ? 'active' : ''}`}
             onClick={() => setActiveTab('stt')}
           >
             🎙️ Speech-to-Text
           </button>
           {userRole === 'user' && (
-            <button 
+            <button
               className={`nav-btn ${activeTab === 'history' ? 'active' : ''}`}
               onClick={() => setActiveTab('history')}
             >
@@ -441,7 +441,7 @@ function WorkspacePage() {
 
       {/* MAIN CONTENT AREA */}
       <main className="main-content-layout">
-        
+
         {/* ================= TAB 1: TEXT-TO-SPEECH (TTS) ================= */}
         {activeTab === 'tts' && (
           <div className="tts-grid">
@@ -464,7 +464,7 @@ function WorkspacePage() {
                 />
                 <div className="char-count-bar">
                   <div className="progress-bg">
-                    <div 
+                    <div
                       className={`progress-fill ${text.length > charLimit * 0.9 ? 'warning' : ''}`}
                       style={{ width: `${Math.min(100, (text.length / charLimit) * 100)}%` }}
                     />
@@ -481,14 +481,14 @@ function WorkspacePage() {
 
               {/* ACTION BUTTONS */}
               <div className="action-button-row">
-                <button 
+                <button
                   className="btn btn-secondary"
                   disabled={isGenerating || !text.trim()}
                   onClick={() => handleGenerateTTS(true)}
                 >
                   ▶ Preview
                 </button>
-                <button 
+                <button
                   className="btn btn-primary"
                   disabled={isGenerating || !text.trim()}
                   onClick={() => handleGenerateTTS(false)}
@@ -515,22 +515,22 @@ function WorkspacePage() {
                         {formatDuration(audioCurrentTime)} / {formatDuration(audioDuration)}
                       </div>
                     </div>
-                    <a 
-                      href={currentAudioUrl} 
-                      download="polly_voice.mp3" 
-                      target="_blank" 
+                    <a
+                      href={currentAudioUrl}
+                      download="polly_voice.mp3"
+                      target="_blank"
                       rel="noreferrer"
                       className="btn btn-secondary btn-sm"
                     >
                       💾 Download MP3
                     </a>
                   </div>
-                  <input 
-                    type="range" 
+                  <input
+                    type="range"
                     className="audio-seeker"
-                    min="0" 
-                    max={audioDuration || 100} 
-                    value={audioCurrentTime} 
+                    min="0"
+                    max={audioDuration || 100}
+                    value={audioCurrentTime}
                     onChange={(e) => {
                       if (audioRef.current) {
                         audioRef.current.currentTime = Number(e.target.value);
@@ -549,19 +549,19 @@ function WorkspacePage() {
               <div className="form-group">
                 <label>Voice Engine (Polly)</label>
                 <div className="engine-selector">
-                  <button 
+                  <button
                     className={`engine-tab ${engine === 'neural' ? 'active' : ''}`}
                     onClick={() => setEngine('neural')}
                   >
                     Neural ⚡
                   </button>
-                  <button 
+                  <button
                     className={`engine-tab ${engine === 'standard' ? 'active' : ''}`}
                     onClick={() => setEngine('standard')}
                   >
                     Standard
                   </button>
-                  <button 
+                  <button
                     className={`engine-tab ${engine === 'long-form' ? 'active' : ''}`}
                     onClick={() => setEngine('long-form')}
                   >
@@ -605,9 +605,9 @@ function WorkspacePage() {
                   <label>Speech Rate</label>
                   <span className="slider-value">{speed}%</span>
                 </div>
-                <input 
-                  type="range" min="20" max="200" step="5" 
-                  value={speed} onChange={(e) => setSpeed(Number(e.target.value))} 
+                <input
+                  type="range" min="20" max="200" step="5"
+                  value={speed} onChange={(e) => setSpeed(Number(e.target.value))}
                 />
               </div>
 
@@ -616,9 +616,9 @@ function WorkspacePage() {
                   <label>Volume</label>
                   <span className="slider-value">{volume > 0 ? `+${volume}` : volume} dB</span>
                 </div>
-                <input 
-                  type="range" min="-10" max="10" step="1" 
-                  value={volume} onChange={(e) => setVolume(Number(e.target.value))} 
+                <input
+                  type="range" min="-10" max="10" step="1"
+                  value={volume} onChange={(e) => setVolume(Number(e.target.value))}
                 />
               </div>
 
@@ -627,9 +627,9 @@ function WorkspacePage() {
                   <label>Break Time</label>
                   <span className="slider-value">{breakTime} ms</span>
                 </div>
-                <input 
-                  type="range" min="0" max="2000" step="100" 
-                  value={breakTime} onChange={(e) => setBreakTime(Number(e.target.value))} 
+                <input
+                  type="range" min="0" max="2000" step="100"
+                  value={breakTime} onChange={(e) => setBreakTime(Number(e.target.value))}
                 />
               </div>
 
@@ -642,9 +642,9 @@ function WorkspacePage() {
                   <label>Pitch</label>
                   <span className="slider-value">{pitch > 0 ? `+${pitch}` : pitch}%</span>
                 </div>
-                <input 
-                  type="range" min="-20" max="20" step="1" 
-                  value={pitch} onChange={(e) => setPitch(Number(e.target.value))} 
+                <input
+                  type="range" min="-20" max="20" step="1"
+                  value={pitch} onChange={(e) => setPitch(Number(e.target.value))}
                   disabled={engine !== 'standard'}
                 />
                 {engine !== 'standard' && <span className="helper-text">⚠️ Supported by the Standard engine only</span>}
@@ -652,7 +652,7 @@ function WorkspacePage() {
 
               <div className={`form-group ${engine !== 'standard' ? 'disabled-option' : ''}`}>
                 <label>Emphasis</label>
-                <select 
+                <select
                   value={emphasis} onChange={(e) => setEmphasis(e.target.value)}
                   disabled={engine !== 'standard'}
                 >
@@ -666,7 +666,7 @@ function WorkspacePage() {
               {/* Neural Engine Option */}
               <div className={`form-group ${engine !== 'neural' ? 'disabled-option' : ''}`}>
                 <label>Domain Style</label>
-                <select 
+                <select
                   value={domainStyle} onChange={(e) => setDomainStyle(e.target.value)}
                   disabled={engine !== 'neural'}
                 >
@@ -726,7 +726,7 @@ function WorkspacePage() {
               {authMode === 'register' && '📝 Create an Account'}
               {authMode === 'confirm' && '✉️ Confirm Your Email'}
             </h2>
-            
+
             {authError && <div className="auth-error">{authError}</div>}
             {authMessage && <div className="auth-message">{authMessage}</div>}
 
@@ -734,23 +734,23 @@ function WorkspacePage() {
               {authMode === 'register' && (
                 <div className="form-group">
                   <label>Full name</label>
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     placeholder="Enter your full name"
-                    value={authNameInput} 
-                    onChange={e => setAuthNameInput(e.target.value)} 
+                    value={authNameInput}
+                    onChange={e => setAuthNameInput(e.target.value)}
                   />
                 </div>
               )}
 
               <div className="form-group">
                 <label>Email</label>
-                <input 
-                  type="email" 
-                  placeholder="name@example.com" 
-                  value={authEmailInput} 
-                  onChange={e => setAuthEmailInput(e.target.value)} 
-                  required 
+                <input
+                  type="email"
+                  placeholder="name@example.com"
+                  value={authEmailInput}
+                  onChange={e => setAuthEmailInput(e.target.value)}
+                  required
                 />
               </div>
 
@@ -770,12 +770,12 @@ function WorkspacePage() {
               ) : (
                 <div className="form-group">
                   <label>Password (at least 8 characters)</label>
-                  <input 
-                    type="password" 
-                    placeholder="••••••••" 
-                    value={authPasswordInput} 
-                    onChange={e => setAuthPasswordInput(e.target.value)} 
-                    required 
+                  <input
+                    type="password"
+                    placeholder="••••••••"
+                    value={authPasswordInput}
+                    onChange={e => setAuthPasswordInput(e.target.value)}
+                    required
                   />
                 </div>
               )}
