@@ -1,52 +1,74 @@
 ---
-title: "Xây dựng và triển khai Frontend"
+title: "Triển khai Frontend"
 date: 2026-07-30
 weight: 3
 chapter: false
 pre: " <b> 5.3. </b> "
 ---
 
-# Xây dựng và triển khai Frontend
+# Triển khai Frontend
 
-## Mục tiêu
+Trong giai đoạn này, frontend React của Polly Voice được triển khai bằng
+**AWS Amplify Hosting**. Amplify lấy source từ GitHub, build ứng dụng bằng
+Node.js 22, publish thư mục `dist` và cung cấp một HTTPS domain để người dùng
+truy cập.
 
-Giai đoạn này tập trung xây dựng giao diện người dùng cho Polly Voice và đưa
-frontend lên môi trường AWS. Kết quả cần đạt được là một website hoạt động qua
-HTTPS, cho phép người dùng:
+Frontend sau khi triển khai sẽ kết nối với:
 
-- Đăng ký, xác nhận email và đăng nhập bằng Amazon Cognito.
-- Nhập văn bản và cấu hình giọng đọc.
-- Nghe thử, tạo và tải file MP3.
-- Upload audio/video để thực hiện Speech-to-Text.
-- Theo dõi trạng thái xử lý.
-- Xem và quản lý lịch sử TTS/STT của tài khoản.
+- Amazon Cognito để đăng ký, xác nhận email và đăng nhập.
+- Amazon API Gateway HTTP API để gọi backend.
+- Amazon S3 thông qua presigned URL để upload media.
 
-Frontend được xây dựng bằng **React 19**, **TypeScript** và **Vite**, sau đó được
-triển khai bằng **AWS Amplify Hosting** tại region `eu-north-1`.
+Kiến trúc của giai đoạn này:
 
-## Lựa chọn công nghệ
+```mermaid
+flowchart LR
+    Developer["Developer"] -->|Push source| GitHub["GitHub"]
+    GitHub -->|Auto build| Amplify["AWS Amplify Hosting"]
+    Amplify --> Website["React Website<br/>HTTPS"]
+    User(["User"]) --> Website
+    Website -->|Authentication| Cognito["Amazon Cognito"]
+    Website -->|REST + JWT| API["API Gateway HTTP API"]
+    Website -->|Presigned PUT| S3[("Private Amazon S3")]
+```
 
-### React và TypeScript
+{{% notice info %}}
+Project sử dụng Amplify Hosting thay cho S3 Static Website Hosting. Cách này giữ
+S3 media bucket ở trạng thái private, đồng thời cung cấp sẵn build pipeline,
+HTTPS và tự động deploy khi GitHub branch thay đổi.
+{{% /notice %}}
 
-React được lựa chọn vì giao diện Polly Voice có nhiều trạng thái tương tác như
-đăng nhập, lựa chọn voice, theo dõi upload, polling trạng thái STT và điều khiển
-audio player. Cách tổ chức theo component giúp từng nhóm chức năng có thể được
-phát triển và thay đổi độc lập.
+## Chuẩn bị source frontend
 
-TypeScript được sử dụng để mô tả request và response của API. Việc này giúp phát
-hiện sớm lỗi sai kiểu dữ liệu giữa frontend và backend, đặc biệt đối với các
-trạng thái bất đồng bộ như `PROCESSING`, `COMPLETED` và `FAILED`.
+1. Trước khi triển khai, source frontend được tổ chức trong thư mục `frontend`.
 
-### Vite
+```text
+polly-voice/
+├── frontend/
+│   ├── public/
+│   ├── src/
+│   ├── .env.example
+│   ├── index.html
+│   ├── package.json
+│   ├── package-lock.json
+│   └── vite.config.ts
+├── backend/
+└── docs/
+```
 
-Vite được sử dụng làm công cụ phát triển và đóng gói frontend. So với cấu hình
-Webpack thủ công, Vite giúp giảm thời gian khởi tạo dự án, hỗ trợ TypeScript và
-tạo production bundle trong thư mục `dist`.
+<!--
+Ảnh cần bổ sung:
+/images/5-Workshop/5.3-deployfrontend/01-frontend-source.png
+Chú thích: Cấu trúc thư mục frontend trong Visual Studio Code.
+-->
 
-Production build của dự án được tạo bằng:
+2. Trong `frontend/package.json`, production build được khai báo:
 
 ```json
 {
+  "engines": {
+    "node": ">=20.19"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
@@ -56,272 +78,117 @@ Production build của dự án được tạo bằng:
 }
 ```
 
-Lệnh build thực hiện hai công việc:
+Lệnh `npm run build` kiểm tra TypeScript và tạo static assets trong thư mục
+`frontend/dist`.
 
-1. `tsc -b` kiểm tra TypeScript.
-2. `vite build` tối ưu JavaScript, CSS và static assets cho production.
+3. Frontend được build thử trước khi đưa lên GitHub.
 
-### AWS Amplify Hosting
-
-AWS Amplify Hosting được lựa chọn thay cho việc tự cấu hình S3 và CloudFront vì
-dịch vụ cung cấp sẵn:
-
-- Kết nối trực tiếp với GitHub.
-- Tự động build khi branch có commit mới.
-- HTTPS và domain `amplifyapp.com`.
-- Lưu build log theo từng deployment.
-- Quản lý environment variables.
-- Hỗ trợ rollback deployment.
-
-Amplify chỉ chịu trách nhiệm build và host static frontend. Logic TTS/STT vẫn
-được thực hiện bởi API Gateway, Lambda và các dịch vụ backend.
-
-## Kiến trúc triển khai Frontend
-
-```mermaid
-flowchart LR
-    Developer["Developer"]
-    GitHub["GitHub Repository<br/>Branch hieu"]
-
-    subgraph AWS["AWS Cloud — eu-north-1"]
-        Amplify["AWS Amplify Hosting"]
-        Build["Amplify Build<br/>Node.js 22"]
-        CDN["HTTPS Website"]
-        Cognito["Amazon Cognito"]
-        API["API Gateway HTTP API"]
-        S3[("Private Amazon S3")]
-    end
-
-    User(["User"])
-
-    Developer -->|Push source| GitHub
-    GitHub -->|Webhook| Amplify
-    Amplify --> Build
-    Build -->|Publish frontend/dist| CDN
-    User -->|HTTPS| CDN
-    CDN -->|Sign up / Sign in| Cognito
-    CDN -->|REST + Bearer JWT| API
-    CDN -->|Presigned PUT| S3
+```powershell
+cd frontend
+npm ci
+npm run build
 ```
 
-Mã nguồn được lưu trên GitHub. Khi branch production thay đổi, Amplify lấy source,
-cài dependencies, tạo production build và publish nội dung của thư mục `dist`.
-Website sau đó gọi Cognito và backend thông qua các public endpoint riêng biệt.
-
-## Quá trình xây dựng giao diện
-
-### Phiên bản ban đầu
-
-Phiên bản frontend đầu tiên tập trung vào màn hình Text-to-Speech. Giao diện cung
-cấp vùng nhập văn bản, lựa chọn voice, engine, tốc độ, âm lượng và khoảng nghỉ.
-Sau đó dự án được mở rộng với audio player, chức năng download, Speech-to-Text,
-History, Profile và authentication.
-
-Trong giai đoạn đầu, phần lớn logic giao diện được đặt trong một component lớn.
-Cách tổ chức này giúp tạo prototype nhanh nhưng gây khó khăn khi bổ sung Cognito,
-STT bất đồng bộ và nhiều API endpoint.
-
-### Tổ chức lại source theo chức năng
-
-Frontend được tái cấu trúc theo module nghiệp vụ:
+Kết quả build thành công phải có file:
 
 ```text
-frontend/src/
-├── @core/                 # Helper và formatter độc lập
-├── @theme/                # Theme và style dùng chung
-├── guard/                 # Bảo vệ nội dung yêu cầu đăng nhập
-├── pages/
-│   ├── history/           # Lịch sử TTS/STT
-│   ├── profile/           # Thông tin tài khoản Cognito
-│   ├── speech-to-text/    # Giao diện và trạng thái STT
-│   └── workspace/         # Điều phối dashboard chính
-├── security/              # Cognito authentication
-└── shared/
-    ├── models/            # Interface và type
-    ├── services/          # REST client và S3 upload
-    └── settings/          # Preset và cấu hình voice
+frontend/dist/index.html
 ```
 
-Việc tách source mang lại các lợi ích:
+<!--
+Ảnh cần bổ sung:
+/images/5-Workshop/5.3-deployfrontend/02-local-build-success.png
+Chú thích: Production build của frontend được tạo thành công.
+-->
 
-- Logic gọi API không còn nằm trực tiếp trong component giao diện.
-- Authentication được quản lý trong module `security`.
-- Model TTS/STT được tái sử dụng giữa các page.
-- Cấu hình voice và preset được quản lý tập trung.
-- Component có phạm vi trách nhiệm rõ ràng hơn.
-- Việc sửa giao diện không ảnh hưởng trực tiếp tới lớp giao tiếp backend.
+4. Source được commit và push lên branch `hieu` của GitHub repository.
 
-## Kết nối frontend với backend
-
-Frontend không viết cứng API URL trong component. Base URL được đọc từ biến môi
-trường:
-
-```typescript
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL ??
-  'http://localhost:8080/api/v1';
+```powershell
+git add frontend
+git commit -m "prepare frontend for Amplify deployment"
+git push origin hieu
 ```
 
-Cách thiết kế này cho phép cùng một source hoạt động ở hai môi trường:
+Không đưa các file chứa credential, JWT hoặc `.env` local lên repository.
 
-| Môi trường | API base URL |
-|---|---|
-| Local | `http://localhost:8080/api/v1` |
-| AWS | `https://<api-id>.execute-api.eu-north-1.amazonaws.com/api/v1` |
+<!--
+Ảnh cần bổ sung:
+/images/5-Workshop/5.3-deployfrontend/03-github-repository.png
+Chú thích: Frontend source trên GitHub branch hieu.
+-->
 
-Khi tạo TTS, service gửi JSON tới backend:
+## Tạo ứng dụng trên AWS Amplify
 
-```typescript
-const response = await fetch(
-  `${API_BASE_URL}/tts${preview ? '/preview' : ''}`,
-  {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...authHeaders()
-    },
-    body: JSON.stringify(payload)
-  }
-);
+5. Truy cập **AWS Management Console**, chọn region **Europe (Stockholm) –
+`eu-north-1`**, sau đó tìm dịch vụ **AWS Amplify**.
+
+<!--
+Ảnh cần bổ sung:
+/images/5-Workshop/5.3-deployfrontend/04-open-amplify.png
+Chú thích: Dịch vụ AWS Amplify tại region eu-north-1.
+-->
+
+6. Trong trang Amplify, chọn **Create new app** hoặc **Deploy an app**.
+
+Ở bước chọn source provider, chọn **GitHub** và cho phép Amplify truy cập
+repository của project.
+
+<!--
+Ảnh cần bổ sung:
+/images/5-Workshop/5.3-deployfrontend/05-connect-github.png
+Chú thích: Chọn GitHub làm source provider.
+-->
+
+7. Chọn repository:
+
+```text
+super-chickens-aws/polly-voice
 ```
 
-Nếu người dùng đã đăng nhập, request chứa Cognito access token:
+Chọn branch:
 
-```typescript
-function authHeaders(): Record<string, string> {
-  const accessToken = localStorage.getItem('access_token');
-
-  if (accessToken) {
-    return {
-      Authorization: `Bearer ${accessToken}`
-    };
-  }
-
-  return {
-    'X-User-Id':
-      localStorage.getItem('local_user_id') ?? 'guest'
-  };
-}
+```text
+hieu
 ```
 
-Header `X-User-Id` chỉ hỗ trợ quá trình phát triển local. Trên AWS, backend xác
-minh Bearer token do Cognito phát hành.
+Branch này được sử dụng làm production branch. Mỗi commit mới trên branch sẽ
+kích hoạt một Amplify deployment.
 
-## Tích hợp Amazon Cognito
+<!--
+Ảnh cần bổ sung:
+/images/5-Workshop/5.3-deployfrontend/06-select-repository-branch.png
+Chú thích: Repository và production branch được kết nối với Amplify.
+-->
 
-Frontend sử dụng package `amazon-cognito-identity-js` để giao tiếp với Cognito
-User Pool. Pool được khởi tạo từ biến môi trường:
+8. Đặt tên ứng dụng:
 
-```typescript
-const awsEnabled =
-  import.meta.env.VITE_AWS_ENABLED === 'true';
-
-const userPoolId =
-  import.meta.env.VITE_COGNITO_USER_POOL_ID ?? '';
-
-const clientId =
-  import.meta.env.VITE_COGNITO_CLIENT_ID ?? '';
+```text
+polly-voice
 ```
 
-App Client được cấu hình cho Single-page Application và không sử dụng client
-secret. Đây là yêu cầu quan trọng vì JavaScript chạy trên trình duyệt không thể
-bảo vệ một secret dài hạn.
+Repository chứa cả frontend và backend nên Amplify được cấu hình theo dạng
+monorepo. App root của website là:
 
-### Cải tiến luồng xác nhận email
-
-Trong phiên bản đầu, luồng đăng ký phụ thuộc vào popup. Trên trình duyệt Cốc Cốc,
-popup có thể bị chặn hoặc đóng trước khi người dùng nhập mã, dẫn tới tài khoản tồn
-tại trong Cognito nhưng vẫn ở trạng thái chưa xác nhận.
-
-Để khắc phục, authentication modal được chuyển thành state machine gồm ba trạng
-thái:
-
-```typescript
-'login' | 'register' | 'confirm'
+```text
+frontend
 ```
 
-Khi Cognito yêu cầu xác nhận, giao diện giữ lại email và chuyển trực tiếp sang
-form nhập mã:
+Nếu Amplify yêu cầu biến monorepo root, sử dụng:
 
-```typescript
-if (result === 'confirmation-required') {
-  setAuthMode('confirm');
-  setAuthMessage(
-    `A confirmation code was sent to ${authEmailInput}.`
-  );
-}
+```text
+AMPLIFY_MONOREPO_APP_ROOT=frontend
 ```
 
-Frontend cũng hỗ trợ gửi lại mã khi người dùng chưa nhận được email. Cải tiến này
-loại bỏ phụ thuộc vào popup của trình duyệt và giúp luồng đăng ký có thể tiếp tục
-sau khi xảy ra lỗi.
+<!--
+Ảnh cần bổ sung:
+/images/5-Workshop/5.3-deployfrontend/07-app-settings.png
+Chú thích: App name và monorepo app root của Polly Voice.
+-->
 
-## Hoàn thiện luồng Speech-to-Text
+## Cấu hình quá trình build
 
-Thiết kế STT ban đầu gửi file multipart tới backend. Luồng này phù hợp để thử
-nghiệm local nhưng không phù hợp với production vì file phải đi qua API Gateway
-và Lambda.
-
-Frontend sau đó được thay đổi theo luồng upload trực tiếp:
-
-```mermaid
-sequenceDiagram
-    participant F as React Frontend
-    participant A as API Gateway
-    participant L as Lambda
-    participant S as Amazon S3
-    participant T as Amazon Transcribe
-
-    F->>A: Yêu cầu upload session
-    A->>L: POST /api/v1/stt/uploads
-    L-->>F: Presigned S3 PUT URL
-    F->>S: Upload media trực tiếp
-    F->>A: POST /api/v1/stt/jobs
-    A->>L: Tạo Transcribe job
-    L->>T: StartTranscriptionJob
-    loop Polling
-        F->>A: GET /api/v1/stt/:id
-        A->>L: Kiểm tra trạng thái
-        L-->>F: PROCESSING / COMPLETED / FAILED
-    end
-```
-
-Đoạn upload sử dụng `XMLHttpRequest` thay cho `fetch` để theo dõi tiến độ:
-
-```typescript
-const request = new XMLHttpRequest();
-request.open('PUT', uploadUrl);
-request.setRequestHeader(
-  'Content-Type',
-  file.type || 'application/octet-stream'
-);
-
-request.upload.onprogress = (event) => {
-  if (event.lengthComputable) {
-    const progress = Math.round(
-      (event.loaded / event.total) * 60
-    );
-    onProgress?.(progress);
-  }
-};
-
-request.send(file);
-```
-
-Thay đổi này giúp:
-
-- File không đi qua API Gateway và Lambda.
-- Hỗ trợ file media lớn hơn.
-- Hiển thị upload progress.
-- Giảm thời gian Lambda giữ request.
-- Tách upload khỏi quá trình Transcribe bất đồng bộ.
-
-## Cấu hình build trên Amplify
-
-Repository chứa cả `frontend` và `backend`, vì vậy Amplify được cấu hình theo mô
-hình monorepo với app root là `frontend`.
-
-Build specification của frontend:
+9. Amplify build frontend bằng Node.js 22 và Vite. Build specification được cấu
+hình như sau:
 
 ```yaml
 version: 1
@@ -345,16 +212,32 @@ applications:
           - node_modules/**/*
 ```
 
-Quá trình build bao gồm:
+Các giá trị quan trọng:
 
-1. Amplify clone repository.
-2. Chuyển vào thư mục `frontend`.
-3. Chọn Node.js 22.
-4. Cài dependencies bằng `npm ci`.
-5. Kiểm tra TypeScript và chạy Vite build.
-6. Publish nội dung thư mục `dist`.
+| Cấu hình | Giá trị |
+|---|---|
+| App root | `frontend` |
+| Node.js | `22` |
+| Install command | `npm ci` |
+| Build command | `npm run build` |
+| Output directory | `dist` |
 
-Các biến môi trường production được cấu hình trong Amplify:
+<!--
+Ảnh cần bổ sung:
+/images/5-Workshop/5.3-deployfrontend/08-build-settings.png
+Chú thích: Build settings của React/Vite frontend.
+-->
+
+{{% notice warning %}}
+Không đặt output directory là `/`. Vite tạo `index.html` trong thư mục `dist`.
+Nếu artifact base directory sai, Amplify có thể chỉ hiển thị trang Welcome thay
+vì giao diện Polly Voice.
+{{% /notice %}}
+
+## Cấu hình môi trường production
+
+10. Frontend không viết cứng API URL và Cognito ID trong component. Các giá trị
+được đọc từ Vite environment variables:
 
 ```text
 VITE_API_BASE_URL
@@ -364,54 +247,213 @@ VITE_COGNITO_USER_POOL_ID
 VITE_COGNITO_CLIENT_ID
 ```
 
-Những biến này không chứa AWS credentials. Giá trị `VITE_*` được đóng gói vào
-JavaScript trong quá trình build, vì vậy chỉ sử dụng chúng cho thông tin public
-như API URL, region, User Pool ID và Client ID.
+Trong **Amplify → Hosting → Environment variables**, cấu hình:
 
-## Các lỗi gặp phải trong quá trình triển khai
+```text
+VITE_API_BASE_URL=https://<api-id>.execute-api.eu-north-1.amazonaws.com/api/v1
+VITE_AWS_ENABLED=true
+VITE_AWS_REGION=eu-north-1
+VITE_COGNITO_USER_POOL_ID=<user-pool-id>
+VITE_COGNITO_CLIENT_ID=<app-client-id>
+```
 
-### Amplify chỉ hiển thị trang Welcome
+<!--
+Ảnh cần bổ sung:
+/images/5-Workshop/5.3-deployfrontend/09-environment-variables.png
+Chú thích: Tên các environment variables trong Amplify.
+-->
 
-Deployment đầu tiên không publish đúng ứng dụng React và Amplify hiển thị trang:
+`VITE_API_BASE_URL` phải là URL API Gateway của môi trường hiện tại và có hậu tố
+`/api/v1`.
+
+Ví dụ production API đã sử dụng trong quá trình phát triển:
+
+```text
+https://7x4houix91.execute-api.eu-north-1.amazonaws.com/api/v1
+```
+
+{{% notice warning %}}
+Các biến bắt đầu bằng `VITE_` được đưa vào JavaScript bundle và có thể được xem
+từ trình duyệt. Không lưu access key, secret access key, password, JWT hoặc
+presigned URL trong Amplify environment variables.
+{{% /notice %}}
+
+## Triển khai Frontend
+
+11. Kiểm tra lại repository, branch, build specification và environment
+variables, sau đó chọn **Save and deploy**.
+
+Amplify thực hiện bốn giai đoạn:
+
+```text
+Provision → Build → Deploy → Verify
+```
+
+<!--
+Ảnh cần bổ sung:
+/images/5-Workshop/5.3-deployfrontend/10-deployment-started.png
+Chú thích: Amplify bắt đầu quá trình triển khai frontend.
+-->
+
+12. Trong build log, kiểm tra Node.js và dependencies:
+
+```text
+Now using node v22...
+npm ci
+```
+
+Sau đó kiểm tra production build:
+
+```text
+tsc -b && vite build
+```
+
+Deployment thành công khi các phase đều có trạng thái hoàn tất và Amplify tìm
+thấy `dist/index.html`.
+
+<!--
+Ảnh cần bổ sung:
+/images/5-Workshop/5.3-deployfrontend/11-build-success.png
+Chú thích: Amplify build và deploy frontend thành công.
+-->
+
+13. Sau khi deployment hoàn tất, Amplify cung cấp domain dạng:
+
+```text
+https://<branch>.<app-id>.amplifyapp.com
+```
+
+Production website của project:
+
+```text
+https://hieu.d1sl9gotr7i3f4.amplifyapp.com
+```
+
+<!--
+Ảnh cần bổ sung:
+/images/5-Workshop/5.3-deployfrontend/12-production-domain.png
+Chú thích: Production domain được AWS Amplify cung cấp.
+-->
+
+## Kết nối production frontend với backend
+
+14. Khi website có domain chính thức, backend được cập nhật để chấp nhận origin:
+
+```text
+https://hieu.d1sl9gotr7i3f4.amplifyapp.com
+```
+
+Origin này được sử dụng trong:
+
+- API Gateway CORS.
+- Express CORS middleware.
+- S3 bucket CORS cho presigned upload.
+
+Không thêm dấu `/` ở cuối origin.
+
+Luồng request production:
+
+```text
+Amplify React Website
+        ↓ Authorization: Bearer <Cognito JWT>
+API Gateway HTTP API
+        ↓
+AWS Lambda
+```
+
+Luồng upload Speech-to-Text:
+
+```text
+Amplify React Website
+        ↓ Yêu cầu presigned URL
+API Gateway → Lambda
+        ↓ Trả presigned URL
+Amplify React Website → Amazon S3
+```
+
+15. Mở production website và kiểm tra bằng Developer Tools → **Network**.
+
+Request Preview phải được gửi đến:
+
+```text
+https://<api-id>.execute-api.eu-north-1.amazonaws.com/api/v1/tts/preview
+```
+
+Request không được gửi tới:
+
+```text
+https://placeholder.invalid
+```
+
+<!--
+Ảnh cần bổ sung:
+/images/5-Workshop/5.3-deployfrontend/13-network-api-request.png
+Chú thích: Frontend production gọi đúng API Gateway endpoint.
+-->
+
+16. Kiểm tra các luồng chính trên production:
+
+- Trang web tải thành công qua HTTPS.
+- Giao diện không bị trắng hoặc chỉ hiển thị background.
+- Đăng ký tài khoản.
+- Nhập mã xác nhận email.
+- Đăng nhập và đăng xuất.
+- TTS Preview phát được audio.
+- Tạo và tải MP3.
+- Upload media trực tiếp lên S3.
+- STT hiển thị trạng thái xử lý.
+- History chỉ hiển thị dữ liệu của user hiện tại.
+
+<!--
+Ảnh cần bổ sung:
+/images/5-Workshop/5.3-deployfrontend/14-production-website.png
+Chú thích: Giao diện Polly Voice hoạt động trên AWS Amplify.
+-->
+
+## Các lỗi đã gặp và cách xử lý
+
+### Lỗi chỉ hiển thị trang Welcome
+
+Amplify deployment ban đầu hoàn tất nhưng website hiển thị:
 
 ```text
 Your app will appear here once you complete your first deployment.
 ```
 
-Nguyên nhân là build output directory không trỏ tới thư mục chứa `index.html`.
-Vite tạo artifact trong `frontend/dist`, trong khi cấu hình ban đầu sử dụng `/`
-hoặc base directory không đúng.
+Build artifact không chứa `index.html` tại base directory mà Amplify đang đọc.
+Project sử dụng Vite nên output đúng là:
 
-Sau khi app root được đặt thành `frontend` và artifact directory thành `dist`,
-Amplify có thể tìm thấy `index.html` và publish website.
+```text
+frontend/dist
+```
 
-### Lockfile chứa native dependency của Windows
+Sau khi đặt `appRoot: frontend` và `baseDirectory: dist`, Amplify publish đúng
+website.
 
-Frontend được phát triển trên Windows nhưng Amplify build trên Linux. Build đầu
-tiên thất bại với lỗi:
+### Lỗi native dependency của Windows
+
+Build trên Amplify Linux từng thất bại với:
 
 ```text
 Unsupported platform for
 @rolldown/binding-win32-x64-msvc
 ```
 
-Nguyên nhân là lockfile từng tham chiếu trực tiếp tới native binding dành cho
-Windows. Linux build container không thể cài package đó.
+Source được phát triển trên Windows, trong khi Amplify build trên Linux.
+`package-lock.json` từng buộc quá trình cài đặt sử dụng native binding Windows.
+Lockfile được cập nhật để các binding theo hệ điều hành được quản lý dưới dạng
+optional dependency.
 
-Lockfile được tạo lại để dependency theo platform được quản lý đúng dưới dạng
-optional dependency, thay vì buộc Amplify cài Windows binding.
+### Lỗi Lightning CSS Linux binding
 
-### Thiếu Lightning CSS Linux binding
-
-Sau khi sửa Rolldown, Vite tiếp tục thất bại:
+Build tiếp tục gặp:
 
 ```text
 Cannot find module
 ../lightningcss.linux-x64-gnu.node
 ```
 
-Vấn đề xuất hiện do optional native dependency của Lightning CSS không được cài
-trong môi trường build. Dự án bổ sung:
+Project bổ sung Linux binding vào `optionalDependencies`:
 
 ```json
 {
@@ -421,135 +463,54 @@ trong môi trường build. Dự án bổ sung:
 }
 ```
 
-Sau khi cập nhật `package-lock.json`, `npm ci` trên Amplify có thể cài đúng Linux
-binary và production build hoàn tất.
+Sau khi cập nhật lockfile, `npm ci` cài đúng binary cho môi trường Amplify.
 
-### Frontend gọi `placeholder.invalid`
+### Lỗi `Failed to fetch`
 
-Sau khi giao diện được triển khai, chức năng Preview trả về `Failed to fetch`.
 Developer Tools cho thấy request được gửi tới:
 
 ```text
 https://placeholder.invalid/api/v1/tts/preview
 ```
 
-Nguyên nhân không nằm ở Polly hay Lambda mà do `VITE_API_BASE_URL` chưa được
-cấu hình đúng trong Amplify. Vì biến Vite được sử dụng tại build time, thay đổi
-environment variable yêu cầu chạy lại frontend deployment.
+Nguyên nhân là `VITE_API_BASE_URL` chưa được cấu hình bằng API Gateway URL thật.
+Vite sử dụng environment variables tại build time, do đó frontend được redeploy
+sau khi giá trị được cập nhật.
 
-Sau khi cập nhật API Gateway URL mới và redeploy, request được gửi đúng tới HTTP
-API tại `eu-north-1`.
+### Lỗi CORS
 
-### CORS giữa Amplify và API Gateway
-
-Local frontend sử dụng origin:
+Backend ban đầu chỉ cho phép:
 
 ```text
 http://localhost:5173
 ```
 
-Trong khi production frontend sử dụng:
+Production request đến từ Amplify domain nên bị trình duyệt chặn. Backend và S3
+CORS sau đó được cập nhật bằng đúng HTTPS origin của Amplify.
 
-```text
-https://hieu.d1sl9gotr7i3f4.amplifyapp.com
-```
+## Kết quả
 
-Backend ban đầu chỉ cho phép local origin nên trình duyệt chặn production request.
-Tham số `AllowedOrigins` trong SAM template được cập nhật bằng Amplify domain.
-S3 CORS cũng sử dụng cùng origin để cho phép presigned PUT upload.
+Frontend đã được triển khai thành công với cấu hình:
 
-## Kết quả triển khai
-
-Frontend đã được triển khai thành công trên AWS Amplify Hosting với các đặc điểm:
-
-| Hạng mục | Kết quả |
+| Thành phần | Kết quả |
 |---|---|
 | Framework | React 19 + TypeScript + Vite |
+| Source | GitHub |
+| Production branch | `hieu` |
 | Hosting | AWS Amplify Hosting |
 | Region | `eu-north-1` |
-| Production branch | `hieu` |
 | Build runtime | Node.js 22 |
-| Artifact | `frontend/dist` |
-| HTTPS | Amplify cung cấp tự động |
+| Build output | `frontend/dist` |
 | Authentication | Amazon Cognito |
-| Backend | API Gateway HTTP API |
-| Upload media | Presigned S3 PUT |
+| Backend endpoint | API Gateway HTTP API |
+| Media upload | Presigned S3 PUT |
+| HTTPS | Amplify quản lý tự động |
 
-Production URL:
+Frontend production đã kết nối được với Cognito, API Gateway và S3. Những vấn đề
+về output directory, native dependencies, environment variables và CORS đã được
+xác định thông qua Amplify build logs và trình duyệt Developer Tools.
 
-```text
-https://hieu.d1sl9gotr7i3f4.amplifyapp.com
-```
-
-Sau khi hoàn tất, frontend có thể:
-
-- Hiển thị đầy đủ trên desktop browser.
-- Đăng ký và xác nhận tài khoản mà không phụ thuộc popup.
-- Gửi Cognito access token tới backend.
-- Gọi TTS Preview và tạo MP3.
-- Upload media trực tiếp lên private S3.
-- Theo dõi Transcribe job.
-- Hiển thị lịch sử riêng của từng người dùng.
-
-## Bằng chứng cần bổ sung vào báo cáo
-
-Các hình sau cần được chụp từ môi trường đã triển khai và đặt trong thư mục
-`static/images/5-Workshop/5.3-deployfrontend/`:
-
-| Mã hình | Nội dung |
-|---|---|
-| Hình 5.3.1 | Cấu trúc source frontend sau khi refactor |
-| Hình 5.3.2 | Amplify kết nối repository và branch `hieu` |
-| Hình 5.3.3 | Amplify build settings |
-| Hình 5.3.4 | Environment variable names, không hiển thị token |
-| Hình 5.3.5 | Build log hoàn tất các phase |
-| Hình 5.3.6 | Production website |
-| Hình 5.3.7 | Form xác nhận email trong giao diện |
-| Hình 5.3.8 | Network request tới API Gateway thật |
-| Hình 5.3.9 | Upload trực tiếp tới S3 bằng presigned URL |
-
-Ảnh cần được cắt gọn, có chú thích và che mọi JWT, confirmation code hoặc
-presigned URL đầy đủ.
-
-## Đánh giá
-
-### Kết quả đạt được
-
-- Frontend được tách khỏi backend và có thể triển khai độc lập.
-- Quá trình deploy được tự động hóa theo commit GitHub.
-- Website có HTTPS mà không cần tự quản lý certificate.
-- Environment-specific configuration không bị viết cứng trong source.
-- Authentication và API được tích hợp thành công.
-- Luồng upload STT đã loại bỏ file lớn khỏi API Gateway/Lambda.
-- Source được tổ chức theo module nghiệp vụ để dễ bảo trì.
-
-### Hạn chế
-
-- Frontend hiện sử dụng Amplify domain, chưa có custom domain Route 53.
-- Cognito access token đang được lưu trong `localStorage`.
-- STT sử dụng polling hai giây một lần, có thể tạo nhiều request với job dài.
-- Một số giao diện và component trong Workspace vẫn còn phạm vi trách nhiệm lớn.
-- Chưa có automated UI test và end-to-end test trong CI.
-- Chưa có preview environment riêng cho pull request.
-
-### Hướng phát triển
-
-- Thêm custom domain bằng Route 53.
-- Tách Workspace thành các container nhỏ hơn.
-- Chuyển session management sang thư viện hỗ trợ token lifecycle tốt hơn.
-- Dùng event-driven notification hoặc WebSocket thay cho polling STT.
-- Bổ sung Playwright end-to-end tests.
-- Tạo Amplify preview deployment cho từng pull request.
-- Thêm frontend performance monitoring và error reporting.
-
-## Kết luận
-
-Quá trình hoàn thiện frontend không chỉ bao gồm việc xây dựng giao diện mà còn
-giải quyết các vấn đề về authentication, cấu hình môi trường, khác biệt giữa
-Windows và Linux build container, CORS và upload media lớn. AWS Amplify Hosting
-giúp tự động hóa build và cung cấp HTTPS, trong khi React đảm nhiệm toàn bộ trải
-nghiệm tương tác với Cognito, API Gateway và S3.
-
-Kết quả cuối cùng là một frontend production có thể triển khai lại từ GitHub,
-hoạt động độc lập với backend và đáp ứng đầy đủ các luồng chính của Polly Voice.
-
+{{% notice info %}}
+Phần tiếp theo trình bày quá trình cấu hình API Gateway và triển khai backend
+Lambda để xử lý các request do frontend gửi tới.
+{{% /notice %}}
