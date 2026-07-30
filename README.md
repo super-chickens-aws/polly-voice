@@ -1,537 +1,468 @@
-# DỰ ÁN WEBSITE TEXT TO SPEECH & SPEECH TO TEXT
+# Polly Voice
 
-## 1. Introduction
+Ứng dụng chuyển văn bản thành giọng nói (TTS) và âm thanh thành văn bản (STT), gồm:
 
-### 1.1 Project Name
+- Nhập văn bản, chọn giọng/engine/tốc độ và nghe thử.
+- Tạo, phát và tải file âm thanh.
+- Tải file MP3, MP4, WAV, FLAC, M4A, OGG, WebM hoặc AMR để nhận dạng lời nói.
+- Đăng ký/đăng nhập và lưu lịch sử riêng cho từng người dùng.
+- Chạy hoàn toàn ở máy cá nhân hoặc sử dụng dịch vụ AWS tại `eu-north-1`.
 
-**Polly Voice**
+## 1. Kiến trúc
 
----
-
-### 1.2 Project Objective
-
-Xây dựng một website cho phép người dùng chuyển đổi **Text-to-Speech (TTS)** và **Speech-to-Text (STT)**. Hệ thống hỗ trợ tùy chỉnh giọng đọc, xem trước kết quả, lưu lịch sử chuyển đổi và tải xuống các tệp đã tạo.
-
----
-
-## 2. Main Features
-
-### 2.1 Text-to-Speech (TTS)
-
-**Description:** Chuyển đổi văn bản thành giọng nói.
-
-#### Features
-
-| Feature        | Description                       |
-| -------------- | --------------------------------- |
-| Text Input     | Nhập văn bản trực tiếp            |
-| Text Upload    | Tải lên file `.txt` *(Optional)*  |
-| Language       | Chọn ngôn ngữ (Hiện tại chỉ triển khai tiếng anh)                   |
-| Voice          | Chọn giọng đọc                    |
-| Preset         | Chọn cấu hình giọng đọc có sẵn    |
-| Voice Settings | Điều chỉnh các thông số giọng đọc |
-| Preview        | Nghe thử trước khi xuất file      |
-| Export         | Xuất file âm thanh                |
-
-#### Voice Settings
-
-> **Engine mặc định:** **Neural** — cung cấp giọng đọc tự nhiên nhất. Một số thông số chỉ khả dụng với Standard engine và sẽ được ghi chú rõ.
-
-| Setting      | SSML Tag                   | Giá trị hợp lệ                                                     | Engine hỗ trợ        | Description                          |
-| ------------ | -------------------------- | ------------------------------------------------------------------ | -------------------- | ------------------------------------ |
-| Language     | *(API parameter)*          | `en-US`, `en-GB`, `en-AU`, ...                                     | All                  | Ngôn ngữ (hiện tại chỉ tiếng Anh)   |
-| Voice        | *(API parameter)*          | Danh sách giọng Polly (vd: `Joanna`, `Matthew`, `Amy`, ...)        | All                  | Giọng đọc                            |
-| Engine       | *(API parameter)*          | `neural` *(mặc định)*, `standard`, `long-form`                     | —                    | Bộ máy tổng hợp giọng nói            |
-| Preset       | *(combination)*            | Deep Male, Young Male, Soft Female, Expressive Female, MC, Podcast, Audiobook | All     | Cấu hình giọng đọc có sẵn           |
-| Speed        | `<prosody rate="...">`     | `x-slow`, `slow`, `medium`, `fast`, `x-fast` hoặc `20%`–`200%`    | All                  | Điều chỉnh tốc độ đọc               |
-| Volume       | `<prosody volume="...">`   | `x-soft`, `soft`, `medium`, `loud`, `x-loud` hoặc `+ndB` / `-ndB` | All                  | Điều chỉnh âm lượng                 |
-| Pitch        | `<prosody pitch="...">`    | `x-low`, `low`, `medium`, `high`, `x-high` hoặc `+n%` / `-n%`     | **Standard only**    | Điều chỉnh cao độ giọng              |
-| Break        | `<break time="...">`       | `0ms` – `10000ms` (vd: `500ms`, `2s`)                              | All                  | Tạm dừng giữa các câu               |
-| Emphasis     | `<emphasis level="...">`   | `strong`, `moderate`, `reduced`                                    | **Standard only**    | Nhấn mạnh từ hoặc cụm từ            |
-| Domain Style | `<amazon:domain name="...">` | `news`, `conversational`                                         | **Neural only**      | Phong cách đọc (tin tức / hội thoại) |
-
-> **Lưu ý:** Với engine **Neural** (mặc định), `Pitch` và `Emphasis` **không được hỗ trợ** — UI cần ẩn hoặc vô hiệu hóa các thông số này khi chọn Neural engine.
-
-#### Available Presets
-
-| Preset            | Voice mặc định | Engine    | Mô tả                                        |
-| ----------------- | -------------- | --------- | -------------------------------------------- |
-| Deep Male         | Matthew        | Neural    | Giọng nam trầm, uy quyền                     |
-| Young Male        | Kevin          | Neural    | Giọng nam trẻ, năng động                     |
-| Soft Female       | Joanna         | Neural    | Giọng nữ nhẹ nhàng, chậm rãi                 |
-| Expressive Female | Danielle       | Long-form | Giọng nữ biểu cảm, phù hợp đọc truyện       |
-| MC                | Stephen        | Neural    | Giọng MC rõ ràng, tốc độ vừa phải            |
-| Podcast           | Matthew        | Neural    | Giọng podcast tự nhiên, Domain conversational |
-| Audiobook         | Joanna         | Long-form | Giọng đọc sách, nhịp chậm, rõ ràng           |
-
----
-
-### 2.2 Speech-to-Text (STT) *(Optional)*
-
-**Description:** Chuyển đổi file âm thanh thành văn bản.
-
-#### Features
-
-| Feature            | Description                    |
-| ------------------ | ------------------------------ |
-| Audio Upload       | Tải lên file âm thanh          |
-| Speech Recognition | Chuyển giọng nói thành văn bản |
-| Text Result        | Hiển thị kết quả               |
-| Copy               | Sao chép nội dung              |
-| Download           | Tải xuống file `.txt`          |
-
-#### Supported Audio Formats
-
-|  Format |  Support  |
-| :-----: | :-------: |
-|  `.mp3` | Supported |
-|  `.wav` |  Optional |
-|  `.m4a` |  Optional |
-| `.flac` |  Optional |
-
-
-## 3. Supported File Formats
-
-### Text Files
-
-> **Description:** Các định dạng văn bản được hệ thống hỗ trợ.
-
-| Format | Usage          |
-| :----: | -------------- |
-| `.txt` | Input / Output |
-
----
-
-### Audio Files
-
-> **Description:** Các định dạng âm thanh được hệ thống hỗ trợ.
-
-| Format | Usage          |
-| :----: | -------------- |
-| `.mp3` | Input / Output |
-
----
-
-## 4. User Roles
-
-### Guest
-
-**Description:** Người dùng chưa đăng nhập.
-
-| Permission                              | Status |
-| --------------------------------------- | :----: |
-| Sử dụng Text-to-Speech                  |    ✓   |
-| Sử dụng Speech-to-Text                  |    ✓   |
-| Upload file để chuyển đổi               |    ✓   |
-| Giới hạn số ký tự hoặc thời lượng xử lý |   Yes  |
-| Lưu lịch sử chuyển đổi                  |   No   |
-| Quản lý file                            |   No   |
-
----
-
-### User
-
-**Description:** Người dùng đã đăng nhập.
-
-| Permission                                   | Status |
-| -------------------------------------------- | :----: |
-| Sử dụng Text-to-Speech                       |    ✓   |
-| Sử dụng Speech-to-Text                       |    ✓   |
-| Upload file để chuyển đổi                    |    ✓   |
-| Lưu lịch sử chuyển đổi                       |    ✓   |
-| Quản lý file                                 |    ✓   |
-| Tăng giới hạn số ký tự hoặc thời lượng xử lý |    ✓   |
-| Quản lý thông tin cá nhân                    |    ✓   |
-
----
-
-### Permission Comparison
-
-| Feature         | Guest |  User |
-| --------------- | :---: | :---: |
-| Text-to-Speech  |   ✓   |   ✓   |
-| Speech-to-Text  |   ✓   |   ✓   |
-| Upload File     |   ✓   |   ✓   |
-| Lưu lịch sử     |   ✗   |   ✓   |
-| Quản lý File    |   ✗   |   ✓   |
-| Quản lý Profile |   ✗   |   ✓   |
-| Giới hạn ký tự  |   Có  | Không |
-
-
-## 5. User Interface
-
-### 5.1 Text-to-Speech
-
-**Description:** Giao diện chuyển đổi văn bản thành giọng nói.
-
-| Section      | Features                                                                                                                           |
-| ------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
-| **Input**    | Nhập văn bản trực tiếp hoặc tải lên file (`.txt`)                                                                                  |
-| **Settings** | Chọn **Language**, **Voice**, **Engine**, **Preset**, điều chỉnh **Speed**, **Volume**, **Break**; **Pitch** (Standard only), **Emphasis** (Standard only), **Domain Style** (Neural only) |
-| **Preview**  | Nút **Generate**, **Play Preview** và trình phát âm thanh                                                                          |
-| **Export**   | Chọn định dạng đầu ra (`.mp3`) và tải xuống                                                                                        |
-
----
-
-### 5.2 Speech-to-Text
-
-**Description:** Giao diện chuyển đổi giọng nói thành văn bản.
-
-| Section        | Features                                    |
-| -------------- | ------------------------------------------- |
-| **Upload**     | Tải lên file âm thanh (MP3, WAV,...)        |
-| **Processing** | Hiển thị trạng thái xử lý                   |
-| **Result**     | Hiển thị văn bản sau khi nhận dạng          |
-| **Export**     | Tải kết quả dưới dạng file văn bản (`.txt`) |
-
----
-
-### 5.3 Login *(Optional)*
-
-**Description:** Giao diện xác thực người dùng.
-
-| Features                              |
-| ------------------------------------- |
-| Đăng nhập bằng Email và Password      |
-| Điều hướng đến trang đăng ký (nếu có) |
-
----
-
-### 5.4 Profile *(Optional)*
-
-**Description:** Quản lý thông tin cá nhân và lịch sử sử dụng.
-
-| Features                      |
-| ----------------------------- |
-| Hiển thị thông tin người dùng |
-| Chỉnh sửa thông tin cá nhân   |
-| Xem lịch sử Text-to-Speech    |
-| Xem lịch sử Speech-to-Text    |
-
-
-## 6. System Architecture
-
-### 6.1 Tổng quan
-
-> **Kiến trúc Serverless** trên AWS — không cần quản lý server, tự động scale, chi phí cực thấp (~$10/tháng).
+### 1.1 Kiến trúc tổng thể trên AWS
 
 ```mermaid
-graph TB
-    subgraph "Client"
-        FE["React + Vite<br/>(S3 + CloudFront)"]
-    end
+flowchart TB
+  User(["Người dùng"])
 
-    subgraph "Auth"
-        COG["Amazon Cognito<br/>(User Pool)"]
-    end
+  subgraph Frontend["Frontend"]
+    Amplify["AWS Amplify Hosting"]
+    React["React 19 + Vite + TypeScript"]
+    Amplify --> React
+  end
 
-    subgraph "API Layer"
-        APIGW["API Gateway<br/>(HTTP API + Throttling)"]
-    end
+  subgraph Security["Xác thực"]
+    Cognito["Amazon Cognito User Pool"]
+  end
 
-    subgraph "Compute"
-        LAMBDA["AWS Lambda<br/>(Node.js / Python)"]
-    end
+  subgraph Backend["Backend serverless"]
+    Gateway["Amazon API Gateway HTTP API"]
+    Lambda["AWS Lambda<br/>Node.js + Express"]
+    Gateway --> Lambda
+  end
 
-    subgraph "Data"
-        DDB["Amazon DynamoDB<br/>(NoSQL)"]
-    end
+  subgraph Data["Dữ liệu và media"]
+    DynamoDB[("Amazon DynamoDB<br/>Lịch sử TTS/STT")]
+    S3[("Amazon S3<br/>Audio và transcript")]
+  end
 
-    subgraph "Storage and AI"
-        S3["Amazon S3<br/>(Encrypted, Private)"]
-        POLLY["Amazon Polly<br/>(Neural TTS)"]
-        TRANSCRIBE["Amazon Transcribe<br/>(STT)"]
-    end
+  subgraph AI["Dịch vụ AI"]
+    Polly["Amazon Polly"]
+    Transcribe["Amazon Transcribe<br/>Batch transcription"]
+  end
 
-    subgraph "Security"
-        SM["Secrets Manager"]
-    end
-
-    FE --> COG
-    FE --> APIGW
-    APIGW --> LAMBDA
-    LAMBDA --> DDB
-    LAMBDA --> S3
-    LAMBDA --> POLLY
-    LAMBDA --> TRANSCRIBE
-    LAMBDA --> SM
+  User -->|HTTPS| Amplify
+  React -->|Đăng ký / đăng nhập| Cognito
+  React -->|REST API + Cognito JWT| Gateway
+  Lambda -->|Xác minh JWT qua JWKS| Cognito
+  Lambda --> DynamoDB
+  Lambda --> Polly
+  Lambda --> Transcribe
+  Lambda -->|Presigned GET/PUT URL| S3
+  React -->|Upload trực tiếp bằng presigned PUT| S3
+  Transcribe -->|Đọc audio / ghi JSON| S3
 ```
 
-### 6.2 AWS Services
+### 1.2 Luồng Text-to-Speech
 
-| Dịch vụ | Vai trò | Chi phí/tháng |
+```mermaid
+sequenceDiagram
+  actor U as Người dùng
+  participant R as React / Amplify
+  participant A as API Gateway
+  participant L as Lambda / Express
+  participant P as Amazon Polly
+  participant S as Amazon S3
+  participant D as DynamoDB
+
+  U->>R: Nhập văn bản và chọn giọng
+  R->>A: POST /api/v1/tts
+  A->>L: Chuyển request + Cognito JWT
+  L->>P: SynthesizeSpeech
+  P-->>L: Audio MP3
+  L->>S: Lưu audio
+  L->>D: Lưu lịch sử và trạng thái
+  L-->>R: Presigned download URL
+  R-->>U: Nghe thử hoặc tải MP3
+```
+
+### 1.3 Luồng Speech-to-Text
+
+File audio không đi xuyên qua API Gateway hoặc Lambda. Frontend upload trực tiếp
+vào private S3 bucket để tránh giới hạn payload của API Gateway/Lambda.
+
+```mermaid
+sequenceDiagram
+  actor U as Người dùng
+  participant R as React / Amplify
+  participant A as API Gateway
+  participant L as Lambda / Express
+  participant S as Amazon S3
+  participant T as Amazon Transcribe
+  participant D as DynamoDB
+
+  U->>R: Chọn file audio (tối đa 2 GB)
+  R->>A: POST /api/v1/stt/uploads
+  A->>L: Yêu cầu URL upload
+  L-->>R: Presigned S3 PUT URL
+  R->>S: PUT file trực tiếp
+  R->>A: POST /api/v1/stt/jobs
+  A->>L: Tạo transcription job
+  L->>S: Kiểm tra file và kích thước
+  L->>T: StartTranscriptionJob
+  L->>D: Lưu trạng thái PROCESSING
+  loop Poll mỗi 2 giây
+    R->>A: GET /api/v1/stt/:id
+    A->>L: Kiểm tra trạng thái
+    L->>T: GetTranscriptionJob
+  end
+  T->>S: Ghi kết quả JSON
+  L->>S: Đọc transcript
+  L->>D: Cập nhật COMPLETED
+  L-->>R: Trả nội dung văn bản
+  R-->>U: Hiển thị / copy / tải kết quả
+```
+
+| Thành phần | Công nghệ | Vai trò |
 |---|---|---|
-| **Amazon Cognito** | Xác thực người dùng (đăng ký, đăng nhập, MFA, JWT) | $0 (Free: 50K MAU) |
-| **API Gateway (HTTP API)** | Routing, throttling, request validation | $0 (Free: 1M requests) |
-| **AWS Lambda** | Backend logic (xử lý TTS/STT requests) | $0 (Free: 1M requests) |
-| **Amazon DynamoDB** | Database NoSQL (Serverless) | $0 (Free: 25GB, 25 WCU/RCU) |
-| **Amazon S3** | Lưu trữ file audio/text (encrypted) | ~$0.50 |
-| **Amazon CloudFront** | CDN cho frontend + audio files | $0 (Free: 1TB transfer) |
-| **Amazon Polly** | Text-to-Speech (Neural engine) | ~$1–5 (tùy usage) |
-| **Amazon Transcribe** | Speech-to-Text | ~$1–3 (tùy usage) |
-| **Secrets Manager** | Lưu trữ DB credentials, API config | ~$0.80 |
-| **Tổng ước tính** | | **~$3–10/tháng** |
+| Frontend | React 19, TypeScript, Vite, Amplify Hosting | Giao diện TTS, STT, đăng nhập và lịch sử |
+| Backend | Node.js 22, Express, TypeScript, Lambda | REST API, xác thực và điều phối AWS |
+| Database | Amazon DynamoDB (on-demand) | Lưu lịch sử và trạng thái xử lý |
+| Media | Ổ đĩa local / private Amazon S3 | Lưu audio và transcript; cấp presigned URL |
+| TTS | Bộ tạo WAV local / Amazon Polly | Sinh âm thanh |
+| STT | Kết quả local / Amazon Transcribe Batch | Chuyển audio thành text, hỗ trợ file đến 2 GB |
+| Auth | `X-User-Id` local / Amazon Cognito | Xác thực người dùng |
+| Hạ tầng | AWS SAM, CloudFormation, API Gateway | Triển khai backend serverless |
 
-> **Lưu ý:** Các dịch vụ như Cognito, Lambda, API Gateway và DynamoDB có Free Tier vĩnh viễn rất rộng rãi, hoàn toàn phù hợp để duy trì budget ~$10/tháng kể cả sau năm đầu tiên.
+## 2. Các trang
 
-### 6.3 Caching Strategy
+Ứng dụng React là một dashboard responsive gồm:
 
-> Không sử dụng ElastiCache (ngoài budget). Thay thế bằng **S3-based cache** kết hợp **hash key**.
+- **Text to Speech:** nhập text, chọn voice/engine, điều chỉnh cách đọc, nghe thử, tạo media và tải xuống.
+- **Speech to Text:** tải audio lên, theo dõi trạng thái và tải kết quả.
+- **History:** xem, phát/tải và xóa mềm lịch sử TTS/STT.
+- **Sign in / Sign up:** dùng tài khoản local khi phát triển và Cognito khi chạy AWS.
 
-| Bước | Mô tả |
-|---|---|
-| 1 | Client gửi `POST /tts` với text + settings |
-| 2 | Lambda tính `cache_key = SHA256(text + voice + engine + speed + volume + ssml_params)` |
-| 3 | Kiểm tra S3: `s3://bucket/cache/{cache_key}.mp3` |
-| 4 | **Cache HIT** → Trả Pre-Signed URL ngay ($0 Polly cost) |
-| 5 | **Cache MISS** → Gọi Polly, lưu audio lên S3 cache path, trả URL |
+## 3. Cấu trúc dự án
 
----
+```text
+polly-voice/
+├─ frontend/
+│  ├─ src/
+│  │  ├─ @core/             # Helper và formatter độc lập
+│  │  ├─ @theme/            # Theme và style dùng chung
+│  │  ├─ guard/             # Bảo vệ nội dung yêu cầu đăng nhập
+│  │  ├─ pages/
+│  │  │  ├─ history/        # Lịch sử TTS/STT
+│  │  │  ├─ profile/        # Hồ sơ Cognito
+│  │  │  ├─ speech-to-text/ # Màn hình STT
+│  │  │  └─ workspace/      # Điều phối dashboard
+│  │  ├─ security/          # Cognito authentication
+│  │  └─ shared/
+│  │     ├─ models/         # Interface và type
+│  │     ├─ services/       # REST client và S3 upload
+│  │     └─ settings/       # Preset và cấu hình giọng
+│  ├─ .env.example
+│  └─ package.json
+├─ backend/
+│  ├─ src/
+│  │  ├─ core/              # Environment và HTTP error
+│  │  ├─ infrastructure/
+│  │  │  ├─ aws/            # Amazon Polly
+│  │  │  ├─ database/       # DynamoDB repository
+│  │  │  └─ storage/        # Local/S3 media storage
+│  │  ├─ modules/
+│  │  │  ├─ tts/            # TTS routes và workflow
+│  │  │  └─ stt/            # S3 upload và Transcribe workflow
+│  │  ├─ security/          # Cognito JWT middleware
+│  │  ├─ shared/            # Type dùng chung
+│  │  ├─ app.ts             # Express composition root
+│  │  ├─ server.ts          # Local entry point
+│  │  └─ lambda.ts          # Lambda entry point
+│  ├─ template.yaml         # AWS SAM
+│  └─ .env.example
+├─ ARCHITECTURE.md
+└─ README.md
+```
 
-## 7. Security
+## 4. API
 
-### 7.1 Authentication — Amazon Cognito
+Base URL local: `http://localhost:8080/api/v1`
 
-| Tính năng | Chi tiết |
-|---|---|
-| Đăng ký / Đăng nhập | Cognito User Pool xử lý hoàn toàn |
-| Password Policy | Tối thiểu 8 ký tự, chữ hoa + chữ thường + số + ký tự đặc biệt |
-| Email Verification | Cognito tự động gửi email xác nhận |
-| Token Management | JWT (ID Token + Access Token + Refresh Token), tự động rotation |
-| MFA | Có thể bật TOTP hoặc SMS *(optional)* |
-| Social Login | Hỗ trợ Google, Facebook, Apple *(optional)* |
+| Method | Endpoint | Đăng nhập | Mô tả |
+|---|---|---:|---|
+| GET | `/health` | Không | Kiểm tra backend (không có `/api/v1`) |
+| GET | `/api/v1/voices` | Không | Danh sách giọng |
+| POST | `/api/v1/tts/preview` | Không | Nghe thử, tối đa 500 ký tự |
+| POST | `/api/v1/tts` | Tùy chọn | Tạo audio; có đăng nhập sẽ lưu lịch sử |
+| GET | `/api/v1/tts/history` | Có | Danh sách lịch sử TTS |
+| GET | `/api/v1/tts/:id` | Có | Chi tiết một bản ghi |
+| GET | `/api/v1/tts/:id/download` | Có | URL tải có thời hạn |
+| DELETE | `/api/v1/tts/:id` | Có | Xóa mềm bản ghi |
+| POST | `/api/v1/stt/uploads` | Có | Tạo presigned URL để upload trực tiếp vào S3 |
+| POST | `/api/v1/stt/jobs` | Có | Bắt đầu Amazon Transcribe sau khi upload |
+| POST | `/api/v1/stt` | Có | Upload multipart dự phòng khi chạy local |
+| GET | `/api/v1/stt/history` | Có | Danh sách và cập nhật trạng thái STT |
+| GET | `/api/v1/stt/:id` | Có | Chi tiết/kết quả STT |
+| GET | `/api/v1/stt/:id/download` | Có | URL tải kết quả |
+| DELETE | `/api/v1/stt/:id` | Có | Xóa mềm bản ghi |
 
-> **Thay đổi:** Backend **không** tự lưu password. Bảng `users` chỉ lưu `cognito_sub` (Cognito User ID) để mapping với dữ liệu nội bộ.
+Local gửi header `X-User-Id: demo-user`. Trên AWS gửi `Authorization: Bearer <Cognito access token>`.
 
-### 7.2 API Rate Limiting — API Gateway Throttling
+Ví dụ tạo TTS:
 
-> Không sử dụng AWS WAF (ngoài budget ~$5/tháng). Thay thế bằng **API Gateway built-in throttling** (miễn phí).
-
-| Loại user | Rate Limit | Burst Limit | Ghi chú |
-|---|---|---|---|
-| Guest (No Auth) | 20 requests/giây | 50 | Chặn spam, giới hạn ký tự 500/request |
-| User (Authenticated) | 50 requests/giây | 100 | Giới hạn ký tự 3000/request |
-| `/tts/preview` | 5 requests/giây | 10 | Endpoint dễ bị abuse nhất |
-
-### 7.3 S3 Security
-
-| Cấu hình | Giá trị |
-|---|---|
-| Block Public Access | **ON** (tất cả 4 options) |
-| Server-Side Encryption | SSE-S3 (AES-256) |
-| Bucket Versioning | Enabled |
-| Access Method | **Pre-Signed URLs only** (TTL: 15 phút) |
-| CORS | Chỉ cho phép frontend domain |
-| Lifecycle Policy | Xóa file trong `/cache/` sau 30 ngày; xóa file trong `/temp/` sau 7 ngày |
-
-> **Quan trọng:** Database chỉ lưu Key S3 (ví dụ: `audio_s3_key`), **không bao giờ lưu public URL**. API `/files/{id}/download` trả về Pre-Signed URL có thời hạn 15 phút.
-
-### 7.4 Input Validation
-
-| Field | Rule | Lý do |
-|---|---|---|
-| `text_content` | Max 3,000 ký tự (Guest: 500) | Giới hạn của AWS Polly Neural |
-| `voice` | Whitelist: `Joanna`, `Matthew`, `Kevin`, `Danielle`, `Stephen`, `Amy`, `Emma`, `Brian` | Chống giá trị không hợp lệ |
-| `engine` | Enum: `neural`, `standard`, `long-form` | Chống injection |
-| `language` | Whitelist: `en-US`, `en-GB` | Giới hạn scope hiện tại |
-| `speed` | Range: `20%`–`200%` hoặc enum SSML | Giới hạn SSML |
-| `volume` | Range: `-10dB`–`+10dB` hoặc enum SSML | Giới hạn SSML |
-| File upload | Max 10MB, chỉ `.txt` / `.mp3` / `.wav` | Chống upload file độc hại |
-| SSML content | Sanitize: chỉ cho phép tags trong whitelist | **Chống SSML Injection** |
-
-### 7.5 Secrets Management — AWS Secrets Manager
-
-| Secret Name | Nội dung |
-|---|---|
-| `polly-voice/db-credentials` | RDS host, port, username, password, database name |
-| `polly-voice/cognito-config` | Cognito User Pool ID, App Client ID |
-
-> Backend (Lambda) gọi Secrets Manager khi **cold start**, cache credentials trong memory. Không bao giờ lưu credentials trong `.env` file hay source code.
-
----
-
-## 8. Database (Amazon DynamoDB)
-
-> **Kiến trúc NoSQL:** Hệ thống sử dụng Amazon DynamoDB theo chuẩn Serverless. Việc không sử dụng RDBMS (SQL) nhằm tránh lỗi cạn kiệt connection (Connection Exhaustion) khi Lambda tự động scale out. Dữ liệu được thiết kế theo các bảng (Tables) với Partition Key (PK) và Sort Key (SK). Mọi thời gian đều dùng định dạng **Epoch Timestamp** để dễ dàng query và hỗ trợ TTL.
-
-### 8.1 Bảng `Users`
-
-**Description:** Lưu trữ thông tin tài khoản (đã mapping với Cognito).
-
-| Attribute | Type | Key | Description |
-|---|---|---|---|
-| `cognito_sub` | String | **Partition Key** | Cognito User ID (UUID) làm khóa chính |
-| `email` | String | | Email người dùng |
-| `name` | String | | Họ và tên |
-| `created_at` | Number | | Epoch Timestamp (Thời điểm tạo) |
-| `updated_at` | Number | | Epoch Timestamp (Thời điểm cập nhật) |
-
----
-
-### 8.2 Bảng `TextHistory`
-
-**Description:** Lịch sử Text-to-Speech. (Gộp chung các thông tin file metadata trực tiếp vào bảng để tránh dư thừa).
-
-| Attribute | Type | Key | Description |
-|---|---|---|---|
-| `user_id` | String | **Partition Key** | ID của user (`cognito_sub`) |
-| `created_at` | Number | **Sort Key** | Epoch Timestamp (giúp Query nhanh lịch sử theo thời gian và hỗ trợ TTL) |
-| `history_id` | String | | UUID của record này |
-| `text_content` | String | | Nội dung văn bản (nếu nhập trực tiếp) |
-| `text_s3_key` | String | | **S3 Key** của file văn bản gốc (nếu upload) |
-| `audio_s3_key` | String | | **S3 Key** của file audio mp3 sinh ra (vd: `tts/user1/abc.mp3`) |
-| `audio_file_size`| Number | | Dung lượng file (Bytes) - Max 10MB (tương đương INT) |
-| `engine` | String | | `neural` (default), `standard` |
-| `voice` | String | | `Joanna`, `Matthew`,... |
-| `language` | String | | `en-US`, `en-GB` |
-| `preset` | String | | Preset đã chọn |
-| `ssml_enabled` | Boolean| | `true`/`false` |
-| `ssml_params` | Map | | JSON config cho pitch, emphasis... |
-| `character_count`| Number | | Số lượng ký tự (để tính cost) |
-| `updated_at` | Number | | Epoch Timestamp |
-| `deleted_at` | Number | | Epoch Timestamp (Soft delete. Null = active) |
-
----
-
-### 8.3 Bảng `SpeechHistory`
-
-**Description:** Lịch sử Speech-to-Text. (Gộp chung metadata của file upload).
-
-| Attribute | Type | Key | Description |
-|---|---|---|---|
-| `user_id` | String | **Partition Key** | ID của user (`cognito_sub`) |
-| `created_at` | Number | **Sort Key** | Epoch Timestamp (giúp Query nhanh lịch sử theo thời gian và hỗ trợ TTL) |
-| `history_id` | String | | UUID của record này |
-| `audio_s3_key` | String | | **S3 Key** của file gốc tải lên |
-| `audio_file_size`| Number | | Dung lượng file tải lên (Bytes) - Max 10MB (tương đương INT) |
-| `text_s3_key` | String | | **S3 Key** của file văn bản bóc băng |
-| `result_text` | String | | Nội dung bóc băng |
-| `updated_at` | Number | | Epoch Timestamp |
-| `deleted_at` | Number | | Epoch Timestamp (Soft delete. Null = active) |
-
-> **Lưu ý về thiết kế NoSQL:** Bảng `Files` riêng biệt đã được loại bỏ. Mọi thông tin về file như dung lượng (`_file_size`) và đường dẫn (`_s3_key`) được lưu trực tiếp vào các bảng History tương ứng. Việc này giúp tối ưu hóa một truy vấn (GetItem) duy nhất mà lấy được cả lịch sử lẫn file, rất phù hợp với mô hình truy xuất NoSQL. Mọi trường thời gian sử dụng **Number (Epoch)** thay vì ISO8601 String để tăng tốc Sort/Query và sẵn sàng tích hợp TTL.
-
-## 9. Backend (Serverless)
-
-> **Runtime:** AWS Lambda (Node.js hoặc Python) — mỗi API endpoint là một Lambda function.
-> **API Gateway:** HTTP API — routing, throttling, CORS, request validation.
-> **Auth:** Tất cả endpoints (trừ Guest endpoints) yêu cầu Cognito JWT token trong header `Authorization: Bearer <token>`.
-
-### Authentication — Amazon Cognito (Managed)
-
-| Method | Endpoint | Auth | Description |
-| :----: | -------- | :--: | ----------- |
-| `POST` | `/auth/register` | Public | Đăng ký (Cognito signUp) |
-| `POST` | `/auth/login` | Public | Đăng nhập (Cognito initiateAuth) |
-| `POST` | `/auth/logout` | User | Đăng xuất (Cognito globalSignOut) |
-| `GET` | `/auth/profile` | User | Lấy thông tin user từ Cognito + DB |
-| `PUT` | `/auth/profile` | User | Cập nhật thông tin cá nhân |
-
-> **Lưu ý:** Cognito SDK xử lý logic xác thực. Backend Lambda chỉ cần verify JWT token và mapping `cognito_sub` → `users.id`.
-
----
-
-### Text-to-Speech (TTS)
-
-| Method | Endpoint | Auth | Pagination | Description |
-| :----: | -------- | :--: | :--------: | ----------- |
-| `POST` | `/tts` | Guest / User | — | Chuyển văn bản thành giọng nói |
-| `POST` | `/tts/preview` | Guest / User | — | Nghe thử (không lưu lịch sử, giới hạn 500 ký tự) |
-| `GET` | `/tts/history` | User | `?limit=20&cursor=<Base64>` | Lấy danh sách lịch sử (Cursor-based pagination) |
-| `GET` | `/tts/{id}` | User | — | Lấy chi tiết một lần chuyển đổi |
-| `GET` | `/tts/{id}/download` | User | — | Tạo Pre-Signed GET URL (15 phút) từ `audio_s3_key` |
-| `DELETE` | `/tts/{id}` | User | — | Soft delete một lịch sử |
-
-#### POST /tts — Request Validation
-
-| Field | Type | Required | Validation |
-|-------|------|:--------:|------------|
-| `text` | string | ✓ | Max 3,000 ký tự (Guest: 500) |
-| `voice` | string | ✓ | Whitelist: `Joanna`, `Matthew`, `Kevin`, `Danielle`, `Stephen`, `Amy`, `Emma`, `Brian` |
-| `engine` | string | — | Enum: `neural` (default), `standard`, `long-form` |
-| `language` | string | — | Whitelist: `en-US` (default), `en-GB` |
-| `speed` | string | — | SSML rate hoặc `20%`–`200%` |
-| `volume` | string | — | SSML volume hoặc `-10dB`–`+10dB` |
-| `preset` | string | — | Enum từ Available Presets |
-| `ssml_params` | object | — | JSON chứa `pitch`, `break_time`, `emphasis`, `domain_style` |
-
----
-
-### Speech-to-Text (STT)
-
-| Method | Endpoint | Auth | Pagination | Description |
-| :----: | -------- | :--: | :--------: | ----------- |
-| `POST` | `/stt/presign-upload` | User | — | Tạo Pre-Signed POST URL để client upload trực tiếp file audio lên S3 |
-| `POST` | `/stt` | Guest / User | — | Chuyển file âm thanh thành văn bản |
-| `GET` | `/stt/history` | User | `?limit=20&cursor=<Base64>` | Lấy danh sách lịch sử (Cursor-based pagination) |
-| `GET` | `/stt/{id}` | User | — | Lấy chi tiết một lần chuyển đổi |
-| `GET` | `/stt/{id}/download` | User | — | Tạo Pre-Signed GET URL (15 phút) cho file văn bản kết quả (`text_s3_key`) |
-| `DELETE` | `/stt/{id}` | User | — | Soft delete một lịch sử |
-
----
-
-### Pagination Response Format (DynamoDB Cursor-Based)
-
-```json
-{
-  "data": [],
-  "pagination": {
-    "limit": 20,
-    "next_cursor": "eyJ1c2VyX2lkIjoiMTIzIiwiY3JlYXRlZF9hdCI6MTY5ODc2NTQzMn0="
+```powershell
+$body = @{
+  text = "Hello from Polly Voice"
+  language = "en-US"
+  voice = "Joanna"
+  engine = "neural"
+  outputFormat = "mp3"
+  settings = @{
+    speed = 100; volume = 0; breakTimeMs = 0
+    pitch = 0; emphasis = "none"; domainStyle = "none"
   }
-}
+} | ConvertTo-Json
+
+Invoke-RestMethod `
+  -Uri "http://localhost:8080/api/v1/tts" `
+  -Method Post `
+  -Headers @{"X-User-Id"="demo-user"} `
+  -ContentType "application/json" `
+  -Body $body
 ```
 
----
+## 5. Chạy local từ đầu
 
-### API Summary
+### Yêu cầu
 
-| Module         | Number of APIs |
-| -------------- | :------------: |
-| Authentication |        5       |
-| Text-to-Speech |        6       |
-| Speech-to-Text |        6       |
-| **Total**      |   **17 APIs**  |
+- Node.js `20.19+` (khuyến nghị Node.js 22 LTS).
+- npm.
+- Git.
 
-## 10. References
+### Bước 1 — Backend
 
-### AWS Services Documentation
+```powershell
+cd backend
+Copy-Item .env.example .env
+npm install
+npm run dev
+```
 
-| Resource | Description |
-| -------- | ----------- |
-| **Amazon Polly** | Text-to-Speech service. <br> https://docs.aws.amazon.com/polly/latest/dg/ |
-| **Amazon Transcribe** | Speech-to-Text service. <br> https://docs.aws.amazon.com/transcribe/ |
-| **Amazon Cognito** | User authentication & authorization. <br> https://docs.aws.amazon.com/cognito/ |
-| **API Gateway** | REST/HTTP API management. <br> https://docs.aws.amazon.com/apigateway/ |
-| **AWS Lambda** | Serverless compute. <br> https://docs.aws.amazon.com/lambda/ |
-| **Amazon S3** | Object storage. <br> https://docs.aws.amazon.com/s3/ |
-| **AWS Secrets Manager** | Secrets management. <br> https://docs.aws.amazon.com/secretsmanager/ |
-| **Amazon CloudFront** | CDN. <br> https://docs.aws.amazon.com/cloudfront/ |
-| **SSML Documentation** | Speech Synthesis Markup Language for Polly. <br> https://docs.aws.amazon.com/polly/latest/dg/ssml.html |
+Kiểm tra trong terminal khác:
 
----
+```powershell
+Invoke-RestMethod http://localhost:8080/health
+```
 
-### Development Workflow
+Ở chế độ local, backend tạo WAV thử nghiệm và lưu trong `backend/data/media`; không phát sinh phí AWS.
 
-1. Cấu hình **Amazon Cognito** User Pool cho authentication.
-2. Thiết lập **API Gateway** HTTP API với Lambda integration.
-3. Viết **Lambda functions** cho từng endpoint (Node.js hoặc Python).
-4. Cấu hình **Amazon S3** bucket (encryption, lifecycle, CORS).
-5. Tích hợp **Amazon Polly** (TTS) và **Amazon Transcribe** (STT) qua AWS SDK.
-6. Deploy frontend lên **S3 + CloudFront**.
-7. Lưu credentials trong **Secrets Manager**.
-8. Áp dụng **SSML** để tùy chỉnh giọng đọc.
+### Bước 2 — Frontend
 
----
+```powershell
+cd frontend
+Copy-Item .env.example .env
+npm install
+npm run dev
+```
 
-### Related AWS Services
+Mở `http://localhost:5173`. Có thể dùng bất kỳ username/password nào ở chế độ local.
 
-* **Amazon Polly** – Chuyển đổi văn bản thành giọng nói (Text-to-Speech).
-* **Amazon Transcribe** – Chuyển đổi giọng nói thành văn bản (Speech-to-Text).
-* **Amazon Cognito** – Xác thực và quản lý người dùng.
-* **API Gateway** – Quản lý và bảo vệ API endpoints.
-* **AWS Lambda** – Xử lý backend logic (serverless).
-* **Amazon S3** – Lưu trữ file văn bản và file âm thanh.
-* **Amazon CloudFront** – CDN cho frontend và audio files.
-* **AWS Secrets Manager** – Quản lý credentials và API keys.
-* **AWS IAM** – Quản lý quyền truy cập vào các dịch vụ AWS.
+### Bước 3 — Kiểm tra
+
+```powershell
+cd backend
+npm test
+npm run build
+
+cd ..\frontend
+npm run build
+```
+
+## 6. Triển khai AWS A–Z (`eu-north-1`)
+
+### 6.1 Cài AWS CLI và SAM CLI trên Windows
+
+Tải AWS CLI v2 và AWS SAM CLI bằng bộ cài MSI chính thức, mở PowerShell mới rồi kiểm tra:
+
+```powershell
+aws --version
+sam --version
+```
+
+### 6.2 Đăng nhập AWS CLI
+
+Khuyến nghị AWS IAM Identity Center (SSO):
+
+```powershell
+aws configure sso --profile polly-voice
+aws sso login --profile polly-voice
+aws sts get-caller-identity --profile polly-voice
+```
+
+Khi CLI hỏi `Default client Region`, nhập `eu-north-1`. Nếu tài khoản chưa dùng SSO, có thể dùng `aws configure --profile polly-voice`, nhưng không commit access key vào Git.
+
+Đặt mặc định cho phiên PowerShell:
+
+```powershell
+$env:AWS_PROFILE = "polly-voice"
+$env:AWS_REGION = "eu-north-1"
+$env:AWS_DEFAULT_REGION = "eu-north-1"
+```
+
+### 6.3 Tạo S3 bucket
+
+Tên bucket phải duy nhất toàn cầu:
+
+```powershell
+$bucket = "polly-voice-media-THAY-BANG-TEN-DUY-NHAT"
+aws s3api create-bucket `
+  --bucket $bucket `
+  --region eu-north-1 `
+  --create-bucket-configuration LocationConstraint=eu-north-1
+
+aws s3api put-public-access-block `
+  --bucket $bucket `
+  --public-access-block-configuration `
+  BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+
+aws s3api put-bucket-encryption `
+  --bucket $bucket `
+  --server-side-encryption-configuration `
+  '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
+```
+
+Bucket luôn private; backend trả presigned URL có thời hạn để nghe/tải media.
+
+### 6.4 Tạo Cognito
+
+```powershell
+$poolId = aws cognito-idp create-user-pool `
+  --pool-name polly-voice-users `
+  --region eu-north-1 `
+  --username-attributes email `
+  --auto-verified-attributes email `
+  --query UserPool.Id --output text
+
+$clientId = aws cognito-idp create-user-pool-client `
+  --user-pool-id $poolId `
+  --client-name polly-voice-react `
+  --region eu-north-1 `
+  --no-generate-secret `
+  --explicit-auth-flows ALLOW_USER_SRP_AUTH ALLOW_REFRESH_TOKEN_AUTH `
+  --query UserPoolClient.ClientId --output text
+
+"POOL_ID=$poolId"
+"CLIENT_ID=$clientId"
+```
+
+React là public client nên không tạo client secret. Giao diện hiện tại dùng SRP, không cần Cognito Hosted UI/domain.
+
+### 6.5 Deploy backend bằng SAM
+
+```powershell
+cd backend
+sam validate --lint
+sam build
+sam deploy --guided
+```
+
+Nhập:
+
+```text
+Stack Name: polly-voice-api
+AWS Region: eu-north-1
+Parameter MediaBucketName: <tên bucket>
+Parameter HistoryTableName: polly-voice-history
+Parameter CognitoUserPoolId: <POOL_ID>
+Parameter CognitoClientId: <CLIENT_ID>
+Parameter AllowedOrigins: http://localhost:5173
+Confirm changes before deploy: Y
+Allow SAM CLI IAM role creation: Y
+Save arguments to configuration file: Y
+```
+
+Lấy API URL:
+
+```powershell
+$apiUrl = aws cloudformation describe-stacks `
+  --stack-name polly-voice-api `
+  --region eu-north-1 `
+  --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue" `
+  --output text
+$apiUrl
+```
+
+### 6.6 Cấu hình và build React cho AWS
+
+Sửa `frontend/.env.production`:
+
+```dotenv
+VITE_API_BASE_URL=https://YOUR_API_ID.execute-api.eu-north-1.amazonaws.com/api/v1
+VITE_AWS_ENABLED=true
+VITE_AWS_REGION=eu-north-1
+VITE_COGNITO_USER_POOL_ID=eu-north-1_XXXXXXXXX
+VITE_COGNITO_CLIENT_ID=XXXXXXXXXXXXXXXXXXXXXXXXXX
+```
+
+Sau đó:
+
+```powershell
+cd frontend
+npm install
+npm run build
+```
+
+Thư mục cần deploy là `frontend/dist`. Có thể đưa lên AWS Amplify Hosting hoặc S3 + CloudFront. Sau khi có domain thật, chạy lại `sam deploy` và đổi `AllowedOrigins` thành domain đó.
+
+### 6.7 Kiểm tra production
+
+```powershell
+Invoke-RestMethod "$apiUrl/health"
+aws logs tail /aws/lambda/polly-voice-api-PollyVoiceFunction `
+  --follow --region eu-north-1
+```
+
+Đăng ký tài khoản trên giao diện, nhập mã xác nhận email, đăng nhập, tạo TTS và kiểm tra:
+
+- File xuất hiện trong S3.
+- Lịch sử xuất hiện trong bảng DynamoDB `polly-voice-history`.
+- Audio nghe và tải được qua presigned URL.
+- Upload STT chuyển từ `PROCESSING` sang `COMPLETED`.
+
+## 7. Biến môi trường
+
+### Backend
+
+| Biến | Local | AWS |
+|---|---|---|
+| `AWS_DYNAMODB_TABLE_NAME` | Không dùng khi mock local | Tên bảng DynamoDB |
+| `AWS_ENABLED` | `false` | `true` |
+| `AWS_REGION` | `eu-north-1` | `eu-north-1` |
+| `AWS_S3_MEDIA_BUCKET` | trống | Tên S3 bucket |
+| `AWS_COGNITO_USER_POOL_ID` | trống | User Pool ID |
+| `AWS_COGNITO_CLIENT_ID` | trống | App Client ID |
+| `AWS_COGNITO_ISSUER_URI` | trống | URL issuer của pool |
+| `ALLOWED_ORIGINS` | `http://localhost:5173` | Domain frontend |
+
+### Frontend
+
+| Biến | Ý nghĩa |
+|---|---|
+| `VITE_API_BASE_URL` | Base URL có `/api/v1` |
+| `VITE_AWS_ENABLED` | Bật đăng nhập Cognito |
+| `VITE_AWS_REGION` | `eu-north-1` |
+| `VITE_COGNITO_USER_POOL_ID` | User Pool ID |
+| `VITE_COGNITO_CLIENT_ID` | App Client ID không có secret |
+
+## 8. Lệnh vận hành
+
+```powershell
+# Xem Lambda log
+aws logs tail /aws/lambda/<FUNCTION_NAME> --follow --region eu-north-1
+
+# Deploy lại backend
+cd backend
+sam build
+sam deploy
+```
+
+> Các lệnh tạo/deploy AWS có thể phát sinh chi phí. Đặt AWS Budget/Cost Anomaly Detection và xóa stack/bucket khi không còn sử dụng.
+
+## 9. Tài liệu chính thức
+
+- [Cài AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
+- [Cài AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html)
+- [Cognito app client](https://docs.aws.amazon.com/cognito/latest/developerguide/user-pool-settings-client-apps.html)
+- [Danh sách giọng Amazon Polly](https://docs.aws.amazon.com/polly/latest/dg/available-voices.html)
