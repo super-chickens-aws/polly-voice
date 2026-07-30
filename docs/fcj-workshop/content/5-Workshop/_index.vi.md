@@ -39,6 +39,12 @@ Sau khi hoàn thành workshop, bạn có thể:
 11. Kiểm tra bảo mật và kết quả cuối
 12. Clean-up tài nguyên
 
+## Hướng dẫn thực hiện từ đầu đến cuối
+
+Toàn bộ quy trình chuẩn bị, triển khai, kiểm thử, thu thập bằng chứng và clean-up
+được tổng hợp trong phần
+[Quy trình xây dựng và triển khai Polly Voice](5.3-End-to-end-guide/).
+
 {{% notice warning %}}
 Workshop sử dụng các dịch vụ có thể phát sinh chi phí như Amazon Polly,
 Amazon Transcribe, S3, Amplify và CloudWatch. Hãy cấu hình AWS Budget và thực
