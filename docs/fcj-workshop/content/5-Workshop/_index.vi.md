@@ -39,11 +39,15 @@ Sau khi hoàn thành workshop, bạn có thể:
 11. Kiểm tra bảo mật và kết quả cuối
 12. Clean-up tài nguyên
 
-## Hướng dẫn thực hiện từ đầu đến cuối
+## Nội dung đã hoàn thành
 
-Toàn bộ quy trình chuẩn bị, triển khai, kiểm thử, thu thập bằng chứng và clean-up
-được tổng hợp trong phần
-[Quy trình xây dựng và triển khai Polly Voice](5.3-End-to-end-guide/).
+- [5.1. Tổng quan Workshop](5.1-Workshop-overview/)
+- [5.2. Điều kiện tiên quyết](5.2-Prerequisite/)
+- [5.3. Xây dựng và triển khai Frontend](5.3-Deployfrontend/)
+
+Quy trình thao tác chi tiết được giữ riêng trong
+[Phụ lục triển khai tham khảo](5.3-End-to-end-guide/) và không thay thế phần báo
+cáo quá trình thiết kế, xây dựng và hoàn thiện sản phẩm.
 
 {{% notice warning %}}
 Workshop sử dụng các dịch vụ có thể phát sinh chi phí như Amazon Polly,

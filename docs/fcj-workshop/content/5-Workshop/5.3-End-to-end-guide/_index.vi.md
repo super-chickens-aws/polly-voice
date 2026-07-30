@@ -1,9 +1,9 @@
 ---
-title: "Quy trình thực hiện từ đầu đến cuối"
+title: "Phụ lục: Quy trình triển khai tham khảo"
 date: 2026-07-30
-weight: 3
+weight: 99
 chapter: false
-pre: " <b> 5.3. </b> "
+pre: " <b> Phụ lục. </b> "
 ---
 
 # Quy trình xây dựng và triển khai Polly Voice từ đầu đến cuối
