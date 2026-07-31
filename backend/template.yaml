@@ -28,58 +28,6 @@ Globals:
     Tracing: Active
 
 Resources:
-  HistoryTable:
-    Type: AWS::DynamoDB::Table
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Properties:
-      TableName: !Ref HistoryTableName
-      BillingMode: PAY_PER_REQUEST
-      AttributeDefinitions:
-        - AttributeName: PK
-          AttributeType: S
-        - AttributeName: SK
-          AttributeType: S
-        - AttributeName: entityId
-          AttributeType: S
-      KeySchema:
-        - AttributeName: PK
-          KeyType: HASH
-        - AttributeName: SK
-          KeyType: RANGE
-      GlobalSecondaryIndexes:
-        - IndexName: EntityIndex
-          KeySchema:
-            - AttributeName: entityId
-              KeyType: HASH
-          Projection:
-            ProjectionType: ALL
-      SSESpecification:
-        SSEEnabled: true
-
-  MediaBucket:
-    Type: AWS::S3::Bucket
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Properties:
-      BucketName: !Ref MediaBucketName
-      BucketEncryption:
-        ServerSideEncryptionConfiguration:
-          - ServerSideEncryptionByDefault:
-              SSEAlgorithm: AES256
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
-      CorsConfiguration:
-        CorsRules:
-          - AllowedHeaders: ["*"]
-            AllowedMethods: [GET, HEAD, PUT]
-            AllowedOrigins:
-              - !Ref AllowedOrigins
-            MaxAge: 3600
-
   PollyVoiceApi:
     Type: AWS::Serverless::HttpApi
     Properties:
@@ -127,7 +75,7 @@ Resources:
         Variables:
           NODE_ENV: production
           AWS_ENABLED: "true"
-          AWS_DYNAMODB_TABLE_NAME: !Ref HistoryTable
+          AWS_DYNAMODB_TABLE_NAME: !Ref HistoryTableName
           AWS_S3_MEDIA_BUCKET: !Ref MediaBucketName
           AWS_COGNITO_USER_POOL_ID: !Ref CognitoUserPoolId
           AWS_COGNITO_CLIENT_ID: !Ref CognitoClientId
@@ -137,9 +85,9 @@ Resources:
           PUBLIC_BASE_URL: https://placeholder.invalid
       Policies:
         - DynamoDBCrudPolicy:
-            TableName: !Ref HistoryTable
+            TableName: !Ref HistoryTableName
         - S3CrudPolicy:
-            BucketName: !Ref MediaBucket
+            BucketName: !Ref MediaBucketName
         - Statement:
             - Effect: Allow
               Action:
@@ -157,6 +105,6 @@ Outputs:
   FunctionName:
     Value: !Ref PollyVoiceFunction
   MediaBucket:
-    Value: !Ref MediaBucket
+    Value: !Ref MediaBucketName
   HistoryTable:
-    Value: !Ref HistoryTable
+    Value: !Ref HistoryTableName
