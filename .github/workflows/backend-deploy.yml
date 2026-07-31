@@ -1,0 +1,249 @@
+name: Backend CD
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "backend/**"
+      - ".github/workflows/backend-deploy.yml"
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: polly-voice-backend-dev
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy backend to dev
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: dev
+
+    env:
+      DEPLOY_REGION: ${{ vars.AWS_REGION }}
+      DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+      CFN_EXECUTION_ROLE_ARN: ${{ vars.CFN_EXECUTION_ROLE_ARN }}
+      SAM_ARTIFACTS_BUCKET: ${{ vars.SAM_ARTIFACTS_BUCKET }}
+      CFN_STACK_NAME: ${{ vars.CFN_STACK_NAME }}
+      MEDIA_BUCKET_NAME: ${{ vars.MEDIA_BUCKET_NAME }}
+      HISTORY_TABLE_NAME: ${{ vars.HISTORY_TABLE_NAME }}
+      COGNITO_USER_POOL_ID: ${{ vars.COGNITO_USER_POOL_ID }}
+      COGNITO_CLIENT_ID: ${{ vars.COGNITO_CLIENT_ID }}
+      FRONTEND_ORIGIN: ${{ vars.FRONTEND_ORIGIN }}
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Set up AWS SAM CLI
+        uses: aws-actions/setup-sam@v3
+        with:
+          use-installer: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Validate deployment variables
+        run: |
+          set -euo pipefail
+
+          required_variables=(
+            DEPLOY_REGION
+            DEPLOY_ROLE_ARN
+            CFN_EXECUTION_ROLE_ARN
+            SAM_ARTIFACTS_BUCKET
+            CFN_STACK_NAME
+            MEDIA_BUCKET_NAME
+            HISTORY_TABLE_NAME
+            COGNITO_USER_POOL_ID
+            COGNITO_CLIENT_ID
+            FRONTEND_ORIGIN
+          )
+
+          missing=0
+
+          for variable_name in "${required_variables[@]}"; do
+            if [[ -z "${!variable_name:-}" ]]; then
+              echo "::error::Missing GitHub Environment variable: ${variable_name}"
+              missing=1
+            fi
+          done
+
+          if [[ "$missing" -ne 0 ]]; then
+            exit 1
+          fi
+
+          if [[ "$DEPLOY_REGION" != "eu-north-1" ]]; then
+            echo "::error::Unexpected deployment region: $DEPLOY_REGION"
+            exit 1
+          fi
+
+          if [[ "$HISTORY_TABLE_NAME" != "polly-voice-history" ]]; then
+            echo "::error::Unexpected DynamoDB table: $HISTORY_TABLE_NAME"
+            exit 1
+          fi
+
+          echo "Deployment variables validated."
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Run backend unit tests
+        working-directory: backend
+        run: npm test
+
+      - name: Run backend typecheck
+        working-directory: backend
+        run: npm run typecheck
+
+      - name: Build backend
+        working-directory: backend
+        run: npm run build
+
+      - name: Validate SAM template
+        run: |
+          sam validate \
+            --lint \
+            --template-file backend/template.yaml
+
+      - name: Build SAM application
+        run: |
+          sam build \
+            --template-file backend/template.yaml \
+            --build-dir backend/.aws-sam/build-deploy
+
+      - name: Configure AWS credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: PollyVoice-${{ github.run_id }}
+          aws-region: ${{ vars.AWS_REGION }}
+          mask-aws-account-id: true
+
+      - name: Verify AWS identity
+        run: |
+          set -euo pipefail
+
+          actual_account_id="$(
+            aws sts get-caller-identity \
+              --query Account \
+              --output text \
+              --no-cli-pager
+          )"
+
+          expected_account_id="$(
+            printf '%s' "$DEPLOY_ROLE_ARN" |
+              cut -d: -f5
+          )"
+
+          if [[ "$actual_account_id" != "$expected_account_id" ]]; then
+            echo "::error::The workflow authenticated to an unexpected AWS account."
+            exit 1
+          fi
+
+          echo "AWS account verified."
+          echo "AWS region: $DEPLOY_REGION"
+          echo "Deployment role: polly-voice-github-deploy-dev"
+
+      - name: Deploy backend with AWS SAM
+        run: |
+          set -euo pipefail
+
+          sam deploy \
+            --template-file backend/.aws-sam/build-deploy/template.yaml \
+            --stack-name "$CFN_STACK_NAME" \
+            --region "$DEPLOY_REGION" \
+            --s3-bucket "$SAM_ARTIFACTS_BUCKET" \
+            --s3-prefix "backend/${GITHUB_SHA}" \
+            --role-arn "$CFN_EXECUTION_ROLE_ARN" \
+            --capabilities CAPABILITY_IAM \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset \
+            --no-progressbar \
+            --tags \
+              Project=polly-voice \
+              Environment=dev \
+              ManagedBy=github-actions \
+            --parameter-overrides \
+              "ParameterKey=MediaBucketName,ParameterValue=$MEDIA_BUCKET_NAME" \
+              "ParameterKey=HistoryTableName,ParameterValue=$HISTORY_TABLE_NAME" \
+              "ParameterKey=CognitoUserPoolId,ParameterValue=$COGNITO_USER_POOL_ID" \
+              "ParameterKey=CognitoClientId,ParameterValue=$COGNITO_CLIENT_ID" \
+              "ParameterKey=AllowedOrigins,ParameterValue=$FRONTEND_ORIGIN"
+
+      - name: Read deployed API URL
+        id: stack
+        run: |
+          set -euo pipefail
+
+          api_url="$(
+            aws cloudformation describe-stacks \
+              --stack-name "$CFN_STACK_NAME" \
+              --region "$DEPLOY_REGION" \
+              --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue | [0]" \
+              --output text \
+              --no-cli-pager
+          )"
+
+          if [[ -z "$api_url" || "$api_url" == "None" ]]; then
+            echo "::error::CloudFormation output ApiUrl was not found."
+            exit 1
+          fi
+
+          echo "api_url=$api_url" >> "$GITHUB_OUTPUT"
+          echo "API URL: $api_url"
+
+      - name: Check backend health
+        env:
+          API_URL: ${{ steps.stack.outputs.api_url }}
+        run: |
+          set -euo pipefail
+
+          health_url="${API_URL%/}/health"
+
+          echo "Checking: $health_url"
+
+          curl \
+            --fail \
+            --silent \
+            --show-error \
+            --retry 5 \
+            --retry-delay 5 \
+            --retry-all-errors \
+            "$health_url"
+
+          echo
+          echo "Backend health check passed."
+
+      - name: Write deployment summary
+        env:
+          API_URL: ${{ steps.stack.outputs.api_url }}
+        run: |
+          {
+            echo "## Polly Voice backend deployment"
+            echo
+            echo "| Property | Value |"
+            echo "|---|---|"
+            echo "| Environment | dev |"
+            echo "| Region | $DEPLOY_REGION |"
+            echo "| Stack | $CFN_STACK_NAME |"
+            echo "| API URL | $API_URL |"
+            echo "| Git commit | \`$GITHUB_SHA\` |"
+            echo "| Health check | Passed |"
+          } >> "$GITHUB_STEP_SUMMARY"
