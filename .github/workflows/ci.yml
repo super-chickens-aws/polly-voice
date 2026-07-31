@@ -1,0 +1,98 @@
+name: Repository CI
+
+on:
+  pull_request:
+    paths:
+      - "backend/**"
+      - "frontend/**"
+      - "amplify.yml"
+      - ".github/workflows/ci.yml"
+  push:
+    paths:
+      - "backend/**"
+      - "frontend/**"
+      - "amplify.yml"
+      - ".github/workflows/ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Test, build, and validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Reject UTF-8 BOM and malformed YAML
+        shell: bash
+        run: |
+          shopt -s nullglob
+          yaml_files=(backend/template.yaml .github/workflows/*.yml .github/workflows/*.yaml)
+
+          if [[ -f amplify.yml ]]; then
+            yaml_files+=(amplify.yml)
+          fi
+
+          for file in "${yaml_files[@]}"; do
+            signature="$(od -An -t x1 -N3 "$file" | tr -d ' \n')"
+            if [[ "$signature" == "efbbbf" ]]; then
+              echo "::error file=$file::UTF-8 BOM detected. Save this YAML file as UTF-8 without BOM."
+              exit 1
+            fi
+          done
+
+          ruby -e 'require "psych"; ARGV.each { |file| Psych.parse_file(file); puts "Valid YAML: #{file}" }' "${yaml_files[@]}"
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Test backend
+        working-directory: backend
+        run: npm test
+
+      - name: Type-check backend
+        working-directory: backend
+        run: npm run typecheck
+
+      - name: Build backend
+        working-directory: backend
+        run: npm run build
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Lint frontend
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+      - name: Set up AWS SAM CLI
+        uses: aws-actions/setup-sam@v2
+
+      - name: Make backend build tools available to SAM
+        shell: bash
+        run: echo "$GITHUB_WORKSPACE/backend/node_modules/.bin" >> "$GITHUB_PATH"
+
+      - name: Validate SAM template
+        run: sam validate --lint --template-file backend/template.yaml
+
+      - name: Build SAM application
+        run: sam build --template-file backend/template.yaml --build-dir backend/.aws-sam/build-ci
