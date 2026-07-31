@@ -104,6 +104,11 @@ jobs:
         working-directory: backend
         run: npm ci
 
+      - name: Add backend build tools to PATH
+        run: |
+          echo "$GITHUB_WORKSPACE/backend/node_modules/.bin" >> "$GITHUB_PATH"
+          "$GITHUB_WORKSPACE/backend/node_modules/.bin/esbuild" --version
+
       - name: Run backend unit tests
         working-directory: backend
         run: npm test
