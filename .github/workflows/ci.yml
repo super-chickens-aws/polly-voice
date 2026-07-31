@@ -31,7 +31,11 @@ jobs:
         shell: bash
         run: |
           shopt -s nullglob
-          yaml_files=(backend/template.yaml amplify.yml .github/workflows/*.yml .github/workflows/*.yaml)
+          yaml_files=(backend/template.yaml .github/workflows/*.yml .github/workflows/*.yaml)
+
+          if [[ -f amplify.yml ]]; then
+            yaml_files+=(amplify.yml)
+          fi
 
           for file in "${yaml_files[@]}"; do
             signature="$(od -An -t x1 -N3 "$file" | tr -d ' \n')"
